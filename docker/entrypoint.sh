@@ -284,7 +284,32 @@ fi
 # "Cannot set --home and --prefix together" 等冲突。
 unset PIP_PREFIX PIP_HOME PIP_TARGET PIP_ROOT PIP_USER PIP_INSTALL_OPTION PYTHONUSERBASE
 
-# --- nginx 监听端口替换 ----------------------------------------------------
+# --- nginx 监听地址替换（#162）----------------------------------------------
+# PANEL_HOST 为空 / 0.0.0.0 / :: / [::] 时监听全部网卡（与旧版一致）；
+# 设成具体 IP（localhost 按 127.0.0.1）时 nginx 只听这个地址，Go 后端随之只绑 127.0.0.1，
+# 否则 host 网络下 5701 仍对局域网敞开。不是 IP 字面量就直接报错退出，绝不静默回落到全部网卡。
+PANEL_HOST=${PANEL_HOST:-}
+PANEL_HOST=${PANEL_HOST#\[}
+PANEL_HOST=${PANEL_HOST%\]}
+if [ "${PANEL_HOST}" = "localhost" ]; then
+  PANEL_HOST=127.0.0.1
+fi
+case "${PANEL_HOST}" in
+  ''|0.0.0.0|::)
+    NGINX_LISTEN="${PANEL_PORT}"
+    ;;
+  *)
+    if printf '%s' "${PANEL_HOST}" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$'; then
+      NGINX_LISTEN="${PANEL_HOST}:${PANEL_PORT}"
+    elif printf '%s' "${PANEL_HOST}" | grep -Eq '^[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*$'; then
+      NGINX_LISTEN="[${PANEL_HOST}]:${PANEL_PORT}"
+    else
+      fail "PANEL_HOST=${PANEL_HOST} 不是合法的 IP 地址：可填 127.0.0.1、局域网 IP、::1 或 localhost，留空表示监听全部网卡"
+    fi
+    export SERVER_HOST=127.0.0.1
+    ;;
+esac
+
 NGINX_CONF_PATH=${NGINX_DEFAULT_CONF:-}
 if [ -z "${NGINX_CONF_PATH}" ]; then
   for candidate in /etc/nginx/http.d/default.conf /etc/nginx/conf.d/default.conf /etc/nginx/sites-enabled/default; do
@@ -296,7 +321,8 @@ if [ -z "${NGINX_CONF_PATH}" ]; then
 fi
 
 if [ -n "${NGINX_CONF_PATH}" ] && [ -f "${NGINX_CONF_PATH}" ]; then
-  sed -i "s/listen [0-9]*/listen ${PANEL_PORT}/" "${NGINX_CONF_PATH}"
+  # 按整条 listen 指令替换：docker restart 时 conf 已经是 `listen 127.0.0.1:5700;`，再跑一次结果不变
+  sed -i "s/^\([[:space:]]*\)listen [^;]*;/\1listen ${NGINX_LISTEN};/" "${NGINX_CONF_PATH}"
 fi
 
 # --- config.yaml 幂等生成 --------------------------------------------------

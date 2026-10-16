@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -94,9 +95,14 @@ func buildAccessURLs(port int) []string {
 	return urls
 }
 
-func printStartupSummary(port int) {
-	urls := buildAccessURLs(port)
+func printStartupSummary(host string, port int) {
 	fmt.Println("呆呆面板已经启动")
+	// 指定了具体监听地址（#162）时只有这一个地址能访问，别再列全部网卡
+	if host != "" {
+		fmt.Printf("访问地址：http://%s\n", net.JoinHostPort(host, strconv.Itoa(port)))
+		return
+	}
+	urls := buildAccessURLs(port)
 	if len(urls) == 0 {
 		fmt.Printf("访问地址：http://127.0.0.1:%d\n", port)
 		return
@@ -259,14 +265,13 @@ func main() {
 	router.Setup(engine)
 	setupStaticFrontend(engine, cfg.Server.WebDir)
 
-	addr := fmt.Sprintf(":%d", cfg.Server.Port)
-	listener, err := net.Listen("tcp", addr)
+	listener, err := net.Listen("tcp", cfg.Server.ListenAddr())
 	if err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
 
 	log.SetOutput(service.NewPanelLogFilterWriter(panelWriter))
-	printStartupSummary(cfg.Server.Port)
+	printStartupSummary(cfg.Server.SpecificHost(), cfg.Server.Port)
 
 	// 所有请求的 ctx 都派生自 requestsCtx，关停一开始（Shutdown 关掉监听后）就取消它：
 	// 实时日志、依赖安装输出、订阅拉取输出这些 SSE 长连接都在 select 请求 ctx，会立刻发结束事件收流；

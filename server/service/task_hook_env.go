@@ -121,7 +121,7 @@ var hookEnvRuntimeCriticalNames = map[string]hookEnvRuntimeNotice{
 		symptom:    "脚本再 fork 出来的 node 进程拿不到 sendNotify 注入",
 		appendHint: `export NODE_OPTIONS="$NODE_OPTIONS ..."`,
 	},
-	// NO_PROXY 是 #111 引入的回环直连白名单（localhost,127.0.0.1,::1）：
+	// NO_PROXY 是 #111 引入的回环直连白名单（localhost,127.0.0.1,::1；指定了非回环监听地址时还含该地址，#162）：
 	// 面板开代理后，靠它让脚本回调面板自身的请求绕开代理。
 	// 前置脚本一句 `export NO_PROXY=corp.internal` 就会把它整个顶掉，
 	// 表现成 notify.py 又开始报 502 —— 和「代理没配好」长得一模一样，极难联想。

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"daidai-panel/config"
 	"daidai-panel/model"
 
 	xproxy "golang.org/x/net/proxy"
@@ -66,6 +67,21 @@ func NewHTTPClientWithProxy(timeout time.Duration, proxyOverride string) *http.C
 // 三条分别覆盖 localhost、IPv4 回环、IPv6 回环三种可能出现的写法。
 var loopbackNoProxyHosts = []string{"localhost", "127.0.0.1", "::1"}
 
+// loopbackNoProxyHostList 在 loopbackNoProxyHosts 之外补上面板自身回调地址：
+// 指定了非回环监听地址（#162）时脚本回调的是那个地址，它也得绕开代理。
+func loopbackNoProxyHostList() []string {
+	if config.C == nil {
+		return loopbackNoProxyHosts
+	}
+	selfHost := config.C.Server.SelfHost()
+	for _, host := range loopbackNoProxyHosts {
+		if strings.EqualFold(host, selfHost) {
+			return loopbackNoProxyHosts
+		}
+	}
+	return append(append([]string{}, loopbackNoProxyHosts...), selfHost)
+}
+
 func AppendProxyEnv(env []string) []string {
 	// 回环直连兜底（#111）。主修落点在 BuildManagedRuntimeEnvMapWithScriptToken 的 envMap，
 	// 那里才是子进程里最后落地的一层；这里是第二道保险：
@@ -85,7 +101,7 @@ func AppendProxyEnv(env []string) []string {
 		}
 	}
 	if !hasNoProxy {
-		joined := strings.Join(loopbackNoProxyHosts, ",")
+		joined := strings.Join(loopbackNoProxyHostList(), ",")
 		env = append(env, "NO_PROXY="+joined, "no_proxy="+joined)
 	}
 

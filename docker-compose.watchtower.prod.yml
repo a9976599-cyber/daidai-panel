@@ -21,7 +21,8 @@ services:
     labels:
       com.centurylinklabs.watchtower.enable: "true"
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5700/api/health >/dev/null || exit 1"]
+      # 镜像自带的探测脚本，地址跟着 PANEL_HOST 走（v3.3.7 起）；旧镜像没有这个脚本时回落到原来的探测，避免变 unhealthy
+      test: ["CMD-SHELL", "if [ -x /app/healthcheck.sh ]; then /app/healthcheck.sh; else curl -fsS http://127.0.0.1:5700/api/health >/dev/null; fi"]
       interval: 30s
       timeout: 5s
       retries: 5

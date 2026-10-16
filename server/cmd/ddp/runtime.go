@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -74,6 +75,15 @@ func (rt *cliRuntime) backendPort() int {
 		}
 	}
 	return 5701
+}
+
+// backendBaseURL 是 ddp 调面板后端的地址（#162）：全部网卡 / 回环用 127.0.0.1，指定了非回环监听地址就用它。
+func (rt *cliRuntime) backendBaseURL() string {
+	host := "127.0.0.1"
+	if rt.cfg != nil {
+		host = rt.cfg.Server.SelfHost()
+	}
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(rt.backendPort()))
 }
 
 func (rt *cliRuntime) panelPort() int {

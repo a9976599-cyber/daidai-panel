@@ -573,6 +573,35 @@ docker run -d --name daidai-panel \
   ...
 ```
 
+### 只允许本机访问（host 网络 + 外层 Nginx HTTPS）
+
+用 `--network host` 时，设 `PANEL_HOST=127.0.0.1` 让面板只监听本机，再由宿主机 Nginx 反代对外提供 HTTPS：
+
+```bash
+docker run -d --name daidai-panel --network host \
+  -e PANEL_HOST=127.0.0.1 \
+  -v ./Dumb-Panel:/app/Dumb-Panel \
+  linzixuanzz/daidai-panel:latest
+```
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:5700;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_http_version 1.1;
+    proxy_buffering off;
+}
+```
+
+- `PANEL_HOST` 可填 `127.0.0.1`、局域网 IP、`::1` 或 `localhost`；留空 / `0.0.0.0` / `::` 表示监听全部网卡（默认）。填了不合法的值容器会直接启动失败并报错。
+- 设了 `PANEL_HOST` 后，容器内 Go 后端 `5701` 也随之只绑 `127.0.0.1`，不会在局域网暴露。
+- 只在 host 网络下有意义：bridge 网络（`-p` 端口映射）里设成 `127.0.0.1` 会让映射进来的流量连不上。
+- 裸机 / systemd 部署可在 `config.yaml` 写 `server.host`，或用环境变量 `SERVER_HOST` 覆盖。
+- Magisk 模块版不支持此项，始终绑 `0.0.0.0`。
+
 ### Magisk 模块（Android Root）改端口
 
 Magisk 模块版和 Docker 结构不一样：没有容器内 Nginx，前端 / 后端都由单个 `daidai-server` 二进制在 `PANEL_PORT` 上直接托管，**不要**直接去改 `config.yaml`——每次开机 `service.sh` 都会按 `ports.conf` 重新生成 `config.yaml`，手动改的内容会被覆盖。
@@ -832,6 +861,7 @@ Dumb-Panel/
 | `DATA_DIR` | 数据目录 | `/app/Dumb-Panel` |
 | `DB_PATH` | 数据库路径 | `${DATA_DIR}/daidai.db` |
 | `PANEL_PORT` | 容器内 Nginx 端口 | `5700` |
+| `PANEL_HOST` | 容器内 Nginx 监听地址，如 `127.0.0.1`（host 网络下只允许本机访问）；设了之后 Go 后端也只绑 `127.0.0.1`。见「只允许本机访问」 | 空（全部网卡） |
 | `SERVER_PORT` | 容器内 Go 后端端口（**不要改**） | `5701` |
 | `CONTAINER_NAME` / `IMAGE_NAME` | 面板内一键更新识别自己用 | 空 |
 | `PANEL_UPDATE_MANAGER` | Docker 更新管理方式；精简镜像应设为 `watchtower` | 空 |

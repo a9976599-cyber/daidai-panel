@@ -276,11 +276,13 @@ func BuildManagedRuntimeEnvMapWithScriptToken(workDir, scriptsDir string, defaul
 			noProxyItems = append(noProxyItems, item)
 		}
 	}
-	for _, host := range loopbackNoProxyHosts {
-		if _, exists := noProxyPresent[host]; exists {
+	// 指定了非回环监听地址时也补上面板自身地址（#162）；它可能是带大写的主机名，同样按小写判重
+	for _, host := range loopbackNoProxyHostList() {
+		lower := strings.ToLower(host)
+		if _, exists := noProxyPresent[lower]; exists {
 			continue
 		}
-		noProxyPresent[host] = struct{}{}
+		noProxyPresent[lower] = struct{}{}
 		noProxyItems = append(noProxyItems, host)
 	}
 	mergedNoProxy := strings.Join(noProxyItems, ",")

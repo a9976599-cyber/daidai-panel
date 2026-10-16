@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -22,6 +23,8 @@ type Config struct {
 }
 
 type ServerConfig struct {
+	// Host 为空表示监听全部网卡（#162）；可被环境变量 SERVER_HOST 覆盖
+	Host   string `yaml:"host"`
 	Port   int    `yaml:"port"`
 	Mode   string `yaml:"mode"`
 	WebDir string `yaml:"web_dir"`
@@ -64,6 +67,9 @@ func Load(path string) (*Config, error) {
 		if p, err := strconv.Atoi(envPort); err == nil {
 			cfg.Server.Port = p
 		}
+	}
+	if envHost := os.Getenv("SERVER_HOST"); envHost != "" {
+		cfg.Server.Host = envHost
 	}
 	if envDBPath := os.Getenv("DB_PATH"); envDBPath != "" {
 		cfg.Database.Path = envDBPath
@@ -108,6 +114,31 @@ func Load(path string) (*Config, error) {
 
 	C = cfg
 	return cfg, nil
+}
+
+// ListenAddr 是后端监听地址：Host 为空即全部网卡，IPv6 由 JoinHostPort 自动加方括号（#162）。
+func (s ServerConfig) ListenAddr() string {
+	host := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(s.Host), "["), "]")
+	return net.JoinHostPort(host, strconv.Itoa(s.Port))
+}
+
+// SpecificHost 返回指定的具体监听地址；全部网卡（空 / 0.0.0.0 / ::）返回空串。
+func (s ServerConfig) SpecificHost() string {
+	host := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(s.Host), "["), "]")
+	if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+		return ""
+	}
+	return host
+}
+
+// SelfHost 是面板回调自身用的主机：全部网卡或 localhost 用 127.0.0.1，否则就用指定的地址
+// （只绑了 ::1 或局域网 IP 时 127.0.0.1 连不上）。
+func (s ServerConfig) SelfHost() string {
+	host := s.SpecificHost()
+	if host == "" || strings.EqualFold(host, "localhost") {
+		return "127.0.0.1"
+	}
+	return host
 }
 
 func resolveDataPath(baseDir, raw string) string {

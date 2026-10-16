@@ -3,11 +3,14 @@ package service
 import (
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	"daidai-panel/config"
 	"daidai-panel/database"
 	"daidai-panel/middleware"
 )
@@ -848,7 +851,12 @@ func BuildNotifyHelperEnv(scriptsDir string, workDir string, serverPort int, def
 		return nil, nil, err
 	}
 
-	apiBase := fmt.Sprintf("http://127.0.0.1:%d/api/v1", serverPort)
+	// 全部网卡 / 回环仍走 127.0.0.1；指定了非回环监听地址（#162）就只能连那个地址
+	selfHost := "127.0.0.1"
+	if config.C != nil {
+		selfHost = config.C.Server.SelfHost()
+	}
+	apiBase := fmt.Sprintf("http://%s/api/v1", net.JoinHostPort(selfHost, strconv.Itoa(serverPort)))
 
 	// DAIDAI_NOTIFY_URL / DAIDAI_NOTIFY_TOKEN 是历史契约，内置 notify.py、sendNotify.js
 	// 以及用户既有脚本都在读，只能新增别名、不能改名。

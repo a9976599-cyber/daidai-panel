@@ -107,7 +107,7 @@ func runStatus(rt *cliRuntime) error {
 	resource := service.GetResourceInfo()
 	pid, pidErr := readServerPID(rt.serverPIDFile())
 	serverRunning := pidErr == nil && isProcessRunning(pid)
-	healthURL := fmt.Sprintf("http://127.0.0.1:%d/api/v1/health", rt.backendPort())
+	healthURL := rt.backendBaseURL() + "/api/v1/health"
 	backendReachable := checkHTTPReachable(healthURL)
 
 	var taskCount int64
@@ -200,7 +200,7 @@ func runCheck(rt *cliRuntime) error {
 		add("服务进程", "FAIL", fmt.Sprintf("PID %d 不存在", pid), true)
 	}
 
-	healthURL := fmt.Sprintf("http://127.0.0.1:%d/api/v1/health", rt.backendPort())
+	healthURL := rt.backendBaseURL() + "/api/v1/health"
 	if checkHTTPReachable(healthURL) {
 		add("后端探活", "OK", healthURL, false)
 	} else {

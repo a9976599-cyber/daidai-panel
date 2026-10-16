@@ -112,7 +112,7 @@ func runMCP(rt *cliRuntime, args []string) error {
 
 	baseURL := opts.url
 	if baseURL == "" {
-		baseURL = fmt.Sprintf("http://127.0.0.1:%d", rt.backendPort())
+		baseURL = rt.backendBaseURL()
 	}
 	allowMutations := model.GetRegisteredConfigBool(model.MCPAllowMutationsConfigKey)
 
