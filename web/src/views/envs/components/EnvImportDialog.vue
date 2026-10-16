@@ -17,7 +17,8 @@ const emit = defineEmits<{
 }>()
 
 const importText = ref('')
-const importMode = ref('merge')
+// #161：默认按「名称 + 值」合并，备注相同的不同值不会再被合成一条
+const importMode = ref('merge_value')
 const { dialogFullscreen } = useResponsive()
 
 function closeDialog() {
@@ -68,7 +69,7 @@ watch(
   (visible) => {
     if (!visible) {
       importText.value = ''
-      importMode.value = 'merge'
+      importMode.value = 'merge_value'
     }
   }
 )
@@ -89,8 +90,9 @@ watch(
       :label-position="dialogFullscreen ? 'top' : 'right'"
     >
       <el-form-item label="导入模式">
-        <el-radio-group v-model="importMode">
-          <el-radio value="merge">合并 (同名同值更新)</el-radio>
+        <el-radio-group v-model="importMode" class="env-import-dialog__modes">
+          <el-radio value="merge_value">按名称 + 值合并（推荐）：名称和值都相同的视为同一条，其余新增</el-radio>
+          <el-radio value="merge">按名称 + 备注合并：名称和备注都相同就覆盖值，适合用导入刷新 Token</el-radio>
           <el-radio value="replace">替换 (清空后导入)</el-radio>
         </el-radio-group>
       </el-form-item>
@@ -124,6 +126,21 @@ watch(
 .env-import-dialog__form :deep(.el-form-item__label) {
   white-space: nowrap;
   word-break: keep-all;
+}
+
+/* 模式文案较长：每个选项单独一行，超宽时换行 */
+.env-import-dialog__modes {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.env-import-dialog__modes :deep(.el-radio) {
+  height: auto;
+  margin-right: 0;
+  padding: 4px 0;
+  white-space: normal;
+  line-height: 1.5;
 }
 
 .env-import-dialog__json-item :deep(.el-form-item__label) {

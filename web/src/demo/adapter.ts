@@ -1939,16 +1939,41 @@ route('POST', '/envs/import', (ctx) => {
   const body = bodyObject(ctx)
   const rows = body['envs']
   if (!Array.isArray(rows)) return { message: '成功导入 0 个环境变量', errors: ['请求内容为空'] }
-  if (String(body['mode'] ?? 'merge') === 'replace') db().envs = []
+  const mode = String(body['mode'] || 'merge')
+  if (mode === 'replace') db().envs = []
 
   let imported = 0
+  let updated = 0
   for (const item of rows as Array<Record<string, any>>) {
     const name = String(item['name'] ?? '').trim()
     if (!isValidEnvName(name)) continue
-    createEnv({ ...item, name })
+    const value = String(item['value'] ?? '')
+    const remarks = String(item['remarks'] ?? '')
+    // 复刻服务端 Import：merge 按「名称 + 备注」命中，merge_value（#161）按「名称 + 值」命中
+    const existing = mode === 'merge'
+      ? db().envs.find((env) => env.name === name && env.remarks === remarks)
+      : mode === 'merge_value'
+        ? db().envs.find((env) => env.name === name && env.value === value)
+        : undefined
+    if (existing) {
+      if (mode === 'merge') existing.value = value
+      // merge_value 只在条目带 remarks 键时写备注
+      if (mode === 'merge_value' && 'remarks' in item) existing.remarks = remarks
+      if (typeof item['status'] === 'number') existing.enabled = item['status'] === 0
+      else existing.enabled = typeof item['enabled'] === 'boolean' ? item['enabled'] : true
+      if (Array.isArray(item['groups'])) existing.group = joinEnvGroups(item['groups'].map((group: unknown) => String(group)))
+      else if (String(item['group'] ?? '').trim()) existing.group = joinEnvGroups([String(item['group'])])
+      // 重要只升不降
+      if (item['important'] === true) existing.important = true
+      existing.updated_at = nowIso()
+      updated += 1
+    } else {
+      createEnv({ ...item, name })
+    }
     imported += 1
   }
-  return { message: `成功导入 ${imported} 个环境变量`, errors: [] }
+  const counts = updated > 0 ? `（新建 ${imported - updated} 个，更新 ${updated} 个）` : ''
+  return { message: `成功导入 ${imported} 个环境变量${counts}`, errors: [], created: imported - updated, updated }
 })
 
 function requireEnv(ctx: DemoRequestContext) {

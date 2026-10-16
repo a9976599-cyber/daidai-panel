@@ -192,7 +192,7 @@ stdout 只输出 MCP 协议消息，就绪提示与错误都写到 stderr。
 | `batch_set_task_notify` ⚠️ | 批量打开 / 关闭失败、成功、终止通知，只改传入的开关、不改通知渠道；`ids` 指定任务，或 `all: true` 改全部任务；已在排队的那一次执行仍用旧设置 |
 | `create_env` / `update_env` ⚠️ / `delete_env` ⚠️ | 新建、修改、删除环境变量 |
 | `batch_env_action` ⚠️ | 批量 enable / disable / delete 环境变量 |
-| `import_envs` ⚠️ | 批量导入：`merge`（默认）覆盖「名称 + 备注」相同的变量、其余新增；`replace` 先删除全部现有变量再导入。导入前先校验变量名，并拒绝遮蔽后的值。条目可带 `important`：`merge` 只会把已有变量标为重要、不会取消标记；`replace` 会连重要变量一起删除 |
+| `import_envs` ⚠️ | 批量导入：`merge`（默认）覆盖「名称 + 备注」相同的变量、其余新增；`merge_value` 把「名称 + 值」相同的视为同一条、更新其备注（给了才写）/ 分组 / 启用状态，其余新增；`replace` 先删除全部现有变量再导入。导入前先校验变量名，并拒绝遮蔽后的值。条目可带 `important`：`merge` 只会把已有变量标为重要、不会取消标记；`replace` 会连重要变量一起删除 |
 | `save_script` ⚠️ | 新建或覆盖脚本（保留历史版本，可用 `rollback_script` 回滚） |
 | `run_script` | 调试运行脚本并等待最多约 50 秒；仍在运行时返回 `run_id`，用同一个 `run_id` 再调用可继续取输出，加 `stop: true` 可停止 |
 | `run_code` | 直接执行一段代码（不落盘），`language` 可选 `shell`（或 `bash`）、`python`、`javascript`、`node`、`typescript`、`go`；工作目录是临时目录，脚本目录的绝对路径在环境变量 `DAIDAI_SCRIPTS_DIR` 里；等待与续取方式同 `run_script` |

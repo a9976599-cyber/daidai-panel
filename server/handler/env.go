@@ -1109,6 +1109,7 @@ func (h *EnvHandler) Import(c *gin.Context) {
 	}
 
 	imported := 0
+	updated := 0
 	errors := []string{}
 
 	for i, item := range req.Envs {
@@ -1160,6 +1161,33 @@ func (h *EnvHandler) Import(c *gin.Context) {
 				}
 				database.DB.Model(&existing).Updates(updates)
 				imported++
+				updated++
+				continue
+			}
+		}
+
+		if req.Mode == "merge_value" {
+			// #161：名称 + 值都相同才算同一条，命中时值本来就一样，只更新备注 / 分组 / 启用 / 重要。
+			// 同一文件里重复的「名称 + 值」，第二条会命中第一条刚建的行，自然只落一条。
+			var existing model.EnvVar
+			if database.DB.Where("name = ? AND value = ?", name, value).First(&existing).Error == nil {
+				updates := map[string]interface{}{
+					"enabled": enabled,
+				}
+				// 备注有键才写，省略 remarks 的条目不会把已有备注清空
+				if _, ok := item["remarks"]; ok {
+					updates["remarks"] = remarks
+				}
+				if hasGroup {
+					updates["group"] = group
+				}
+				// 重要只升不降，口径同 merge
+				if important {
+					updates["important"] = true
+				}
+				database.DB.Model(&existing).Updates(updates)
+				imported++
+				updated++
 				continue
 			}
 		}
@@ -1202,9 +1230,15 @@ func (h *EnvHandler) Import(c *gin.Context) {
 		return
 	}
 
+	message := fmt.Sprintf("成功导入 %d 个环境变量", imported)
+	if updated > 0 {
+		message += fmt.Sprintf("（新建 %d 个，更新 %d 个）", imported-updated, updated)
+	}
 	c.JSON(201, gin.H{
-		"message": fmt.Sprintf("成功导入 %d 个环境变量", imported),
+		"message": message,
 		"errors":  errors,
+		"created": imported - updated,
+		"updated": updated,
 	})
 }
 

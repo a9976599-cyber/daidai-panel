@@ -29,6 +29,7 @@ func (t *toolset) registerEnvBatchWriteTools(s *mcp.Server) {
 		writeHints{destructive: true, idempotent: true}, t.batchEnvAction)
 	addWriteTool(s, "import_envs", "导入环境变量",
 		"批量导入环境变量。mode=merge（默认）：名称与备注都相同的已有变量会被覆盖值、分组与启用状态，其余新增；"+
+			"mode=merge_value：名称与值都相同的视为同一条，更新其备注（给了才写）、分组与启用状态，其余新增；"+
 			"mode=replace：先删除面板上的全部环境变量再导入，原有变量不可恢复。导入前会先检查变量名格式，并拒绝 export_envs / list_envs 输出的遮蔽值。"+
 			"条目可带 important：merge 只会把已有变量标为重要、不会取消标记；replace 会连重要变量一起删除。",
 		writeHints{destructive: true}, t.importEnvs)
@@ -102,7 +103,7 @@ type importEnvItem struct {
 
 type importEnvsInput struct {
 	Envs []importEnvItem `json:"envs" jsonschema:"要导入的变量，1 到 1000 条"`
-	Mode string          `json:"mode,omitempty" jsonschema:"merge（默认，覆盖同名同备注的变量、其余新增）或 replace（先删除全部现有变量再导入，不可恢复）"`
+	Mode string          `json:"mode,omitempty" jsonschema:"merge（默认，覆盖同名同备注的变量、其余新增）、merge_value（名称与值都相同的视为同一条、其余新增）或 replace（先删除全部现有变量再导入，不可恢复）"`
 }
 
 const (
@@ -148,8 +149,8 @@ func (t *toolset) importEnvs(ctx context.Context, in importEnvsInput) (any, erro
 	if mode == "" {
 		mode = "merge"
 	}
-	if mode != "merge" && mode != "replace" {
-		return nil, fmt.Errorf("mode 只能是 merge 或 replace，收到 %q", in.Mode)
+	if mode != "merge" && mode != "merge_value" && mode != "replace" {
+		return nil, fmt.Errorf("mode 只能是 merge、merge_value 或 replace，收到 %q", in.Mode)
 	}
 	if len(in.Envs) == 0 || len(in.Envs) > maxImportEnvRows {
 		return nil, fmt.Errorf("envs 需要 1 到 %d 条", maxImportEnvRows)
@@ -165,6 +166,10 @@ func (t *toolset) importEnvs(ctx context.Context, in importEnvsInput) (any, erro
 			return nil, fmt.Errorf("第 %d 条 %s 的值像是 export_envs / list_envs 输出的遮蔽值，导入会把真实凭据覆盖掉，没有导入任何变量", i+1, name)
 		}
 		item := map[string]any{"name": name, "value": env.Value, "remarks": env.Remarks}
+		// merge_value 命中时「有 remarks 键才写备注」：没给备注就不带这个键，免得把已有备注清空
+		if mode == "merge_value" && env.Remarks == "" {
+			delete(item, "remarks")
+		}
 		if group := strings.TrimSpace(env.Group); group != "" {
 			item["group"] = group
 		}

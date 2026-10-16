@@ -141,6 +141,39 @@ func TestImportEnvsReportsPerItemErrors(t *testing.T) {
 	}
 }
 
+// #161：merge_value 原样转发；没给备注的条目不带 remarks 键（面板「有键才写备注」），非法模式仍报错。
+func TestImportEnvsAcceptsMergeValueMode(t *testing.T) {
+	fake := &fakeDispatcher{respond: func(recordedCall) (int, any, error) {
+		return http.StatusCreated, map[string]any{"message": "成功导入 2 个环境变量（新建 1 个，更新 1 个）", "errors": []any{}}, nil
+	}}
+	session := connectTestClient(t, fake, true)
+
+	if result, text := callTool(t, session, "import_envs", map[string]any{"mode": "merge-value", "envs": []map[string]any{{"name": "A", "value": "1"}}}); !result.IsError {
+		t.Fatalf("非法模式应当报错，实际 %s", text)
+	}
+	if len(fake.recorded()) != 0 {
+		t.Fatal("模式非法时不应调用面板接口")
+	}
+
+	result, text := callTool(t, session, "import_envs", map[string]any{"mode": " Merge_Value ", "envs": []map[string]any{
+		{"name": "A", "value": "1"},
+		{"name": "B", "value": "2", "remarks": "r"},
+	}})
+	if result.IsError {
+		t.Fatalf("merge_value 不应失败: %s", text)
+	}
+	want := map[string]any{"mode": "merge_value", "envs": []map[string]any{
+		{"name": "A", "value": "1"},
+		{"name": "B", "value": "2", "remarks": "r"},
+	}}
+	if call := fake.recorded()[0]; call.path != "/envs/import" || !reflect.DeepEqual(call.body, want) {
+		t.Fatalf("merge_value 转发内容不对，实际 %s %#v", call.path, call.body)
+	}
+	if out := decodeObject(t, text); out["mode"] != "merge_value" {
+		t.Fatalf("返回应带 mode=merge_value，实际 %s", text)
+	}
+}
+
 func TestLooksLikeMaskedEnvValueMatchesMaskOutput(t *testing.T) {
 	for _, value := range []string{"abcdefghijkl", "short", "", "中文字符组成的一段很长的值啊", "pt_key=abc;pt_pin=x;"} {
 		if masked := MaskEnvValue(value); !looksLikeMaskedEnvValue(masked) {
