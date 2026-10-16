@@ -340,6 +340,8 @@ export interface DemoScriptFile {
   path: string
   content: string
   mtime: number
+  /** 创建时间（Unix 秒），侧栏「创建时间」排序用 */
+  btime: number
 }
 
 /** GET /configs 的单项，形状见 server/handler/config.go 的 buildConfigResponseItem */

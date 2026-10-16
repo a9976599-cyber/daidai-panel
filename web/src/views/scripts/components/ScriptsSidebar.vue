@@ -6,6 +6,7 @@ import {
   FolderAdd,
   Refresh,
   Search,
+  Sort,
   Upload,
   VideoPlay
 } from '@element-plus/icons-vue'
@@ -70,6 +71,67 @@ function onNewAction(key: string) {
   if (key === 'dir') props.onOpenCreateDir()
   else if (key === 'upload') props.onOpenUpload()
 }
+
+// ===== 目录树排序（issue #160）=====
+// 纯前端排序：目录始终在文件前，同层按所选规则；时间相同或缺失按名称兜底，创建时间拿不到用 mtime 兜底。
+type ScriptSortMode = 'name_asc' | 'name_desc' | 'btime_desc' | 'btime_asc' | 'mtime_desc'
+const SCRIPTS_SORT_MODE_KEY = 'dd:scripts:sort_mode'
+const sortOptions: { value: ScriptSortMode; label: string }[] = [
+  { value: 'name_asc', label: '名称 A→Z' },
+  { value: 'name_desc', label: '名称 Z→A' },
+  { value: 'btime_desc', label: '创建时间 新→旧' },
+  { value: 'btime_asc', label: '创建时间 旧→新' },
+  { value: 'mtime_desc', label: '修改时间 新→旧' }
+]
+// 中文按拼音、数字按大小（2 在 10 前）、不分大小写
+const nameCollator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' })
+// zh-CN 规则会把汉字整体排到英文前面；旧版（后端字节序）是数字、英文在前，所以先按首字符是不是汉字分组
+const hanStartPattern = /^\p{Script=Han}/u
+
+function readStoredSortMode(): ScriptSortMode {
+  try {
+    const stored = window.localStorage.getItem(SCRIPTS_SORT_MODE_KEY)
+    return sortOptions.some(option => option.value === stored) ? (stored as ScriptSortMode) : 'name_asc'
+  } catch {
+    // 隐私模式 / 禁用存储时 getItem 会抛错，回到默认
+    return 'name_asc'
+  }
+}
+
+const sortMode = ref<ScriptSortMode>(readStoredSortMode())
+
+function onSortCommand(command: string) {
+  const mode = command as ScriptSortMode
+  sortMode.value = mode
+  try {
+    window.localStorage.setItem(SCRIPTS_SORT_MODE_KEY, mode)
+  } catch {
+    // 写失败只是下次记不住，静默忽略
+  }
+}
+
+function sortTreeNodes(nodes: TreeNode[], mode: ScriptSortMode): TreeNode[] {
+  const copied = nodes.map(node => (node.isLeaf ? node : { ...node, children: sortTreeNodes(node.children || [], mode) }))
+  return copied.sort((a, b) => {
+    if (a.isLeaf !== b.isLeaf) return a.isLeaf ? 1 : -1
+    let diff = 0
+    if (mode === 'btime_desc' || mode === 'btime_asc') {
+      diff = (a.btime ?? a.mtime ?? 0) - (b.btime ?? b.mtime ?? 0)
+      if (mode === 'btime_desc') diff = -diff
+    } else if (mode === 'mtime_desc') {
+      diff = (b.mtime ?? 0) - (a.mtime ?? 0)
+    }
+    if (diff !== 0) return diff
+    // 非汉字开头的组在前，组内再用 collator；Z→A 整体取反，时间排序的兜底也走这里
+    const aHan = hanStartPattern.test(a.title)
+    const bHan = hanStartPattern.test(b.title)
+    const byName = aHan !== bHan ? (aHan ? 1 : -1) : nameCollator.compare(a.title, b.title)
+    return mode === 'name_desc' ? -byName : byName
+  })
+}
+
+// el-tree 吃排好序的副本；搜索过滤是在这份数据上隐藏节点，顺序自然一致
+const sortedFileTree = computed(() => sortTreeNodes(props.fileTree, sortMode.value))
 
 function filterNode(value: string, data: TreeNode) {
   if (!value) return true
@@ -274,12 +336,12 @@ watch(() => props.revealTicket, () => {
   void revealInTree(props.currentFile)
 })
 
-// 树数据刷新：进入页面、keep-alive 重新激活、刷新按钮、新建 / 重命名 / 移动 / 删除之后。
+// 树数据刷新：进入页面、keep-alive 重新激活、刷新按钮、新建 / 重命名 / 移动 / 删除之后，以及切换排序。
 // flush: 'post'：等 EP 的 setData 跑完、nodesMap 换成新节点再定位。
 // 页面被 keep-alive 缓存期间，路由侦听照样会打开文件，但那时 DOM 不在文档里、滚不动；
 // 重新激活时 onActivated → loadTree 会走到这里把滚动补上。
 watch(
-  () => props.fileTree,
+  sortedFileTree,
   async () => {
     // 🔴 必须先让这一轮 flush 整个跑完，再去展开节点（浏览器实测过，去掉这一行会复现）：
     // setData 换了新节点，按 key 复用的 tree-node 组件看到 node.expanded 由 true 变 false，
@@ -325,6 +387,24 @@ watch(sidebarHidden, async (hidden, wasHidden) => {
           :prefix-icon="Search"
           class="sidebar-search-input"
         />
+        <!-- 排序放在搜索框同一行：下面的工具条已经没有余量（见 issue #136 的注释） -->
+        <el-dropdown trigger="click" @command="onSortCommand">
+          <button class="icon-btn" aria-label="排序" title="排序">
+            <el-icon :size="15"><Sort /></el-icon>
+          </button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item
+                v-for="option in sortOptions"
+                :key="option.value"
+                :command="option.value"
+                :style="sortMode === option.value ? { color: 'var(--el-color-primary)', fontWeight: 600 } : undefined"
+              >
+                {{ option.label }}
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
 
       <div class="sidebar-toolbar">
@@ -370,7 +450,7 @@ watch(sidebarHidden, async (hidden, wasHidden) => {
     <div ref="treeContainerRef" class="sidebar-tree" v-loading="treeLoading">
       <el-tree
         ref="treeRef"
-        :data="fileTree"
+        :data="sortedFileTree"
         node-key="key"
         :props="{ children: 'children', label: 'title' }"
         :highlight-current="true"
@@ -439,7 +519,16 @@ watch(sidebarHidden, async (hidden, wasHidden) => {
   padding: 16px 14px 0;
 }
 
+.sidebar-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .sidebar-search-input {
+  flex: 1;
+  min-width: 0;
+
   :deep(.el-input__wrapper) {
     // issue #144 / v3.3.2：搜索框跟同排按钮同吃「按钮」角色令牌 —— 手机上 rounded 面板放大到 16px，
     // 配 EP default 输入框的 32px 高正好是胶囊形，与其它五页移动端工具栏搜索框（global.scss 的

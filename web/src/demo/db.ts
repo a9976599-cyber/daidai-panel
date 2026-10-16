@@ -1486,6 +1486,7 @@ export interface ScriptTreeNode {
   extension?: string
   size?: number
   mtime?: number
+  btime?: number
 }
 
 function utf8Size(text: string): number {
@@ -1524,12 +1525,17 @@ export function buildScriptTree(prefix = ''): ScriptTreeNode[] {
   for (const dir of dirs) {
     if (prefix ? !dir.startsWith(`${prefix}/`) : dir.includes('/')) continue
     if (dir.split('/').length !== depth + 1) continue
+    const children = buildScriptTree(dir)
+    // 目录本身不存时间，按子节点推：创建取最早、修改取最晚；空目录多半是刚建或刚删空的，记为现在
+    const nowSeconds = Math.floor(Date.now() / 1000)
     childDirs.push({
       key: dir,
       title: dir.slice(dir.lastIndexOf('/') + 1),
       isLeaf: false,
       type: 'directory',
-      children: buildScriptTree(dir),
+      children,
+      mtime: children.length ? Math.max(...children.map((child) => child.mtime ?? nowSeconds)) : nowSeconds,
+      btime: children.length ? Math.min(...children.map((child) => child.btime ?? nowSeconds)) : nowSeconds,
     })
   }
 
@@ -1545,6 +1551,7 @@ export function buildScriptTree(prefix = ''): ScriptTreeNode[] {
       extension: extensionOf(file.path),
       size: utf8Size(file.content),
       mtime: file.mtime,
+      btime: file.btime,
     })
   }
 
@@ -1582,7 +1589,9 @@ export function saveScriptContent(path: string, content: string) {
     return existing
   }
 
-  const created = { path: normalized, content, mtime: Math.floor(Date.now() / 1000) }
+  // 新建文件的创建时间与修改时间相同
+  const createdAt = Math.floor(Date.now() / 1000)
+  const created = { path: normalized, content, mtime: createdAt, btime: createdAt }
   db().scriptFiles.push(created)
   return created
 }

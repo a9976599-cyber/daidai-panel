@@ -1106,10 +1106,12 @@ function buildBackups(now: number): DemoBackupFile[] {
 // ---------------------------------------------------------------------------
 
 function buildScriptFiles(now: number): DemoScriptFile[] {
-  return DEMO_SCRIPT_FILES.map((seed) => ({
+  return DEMO_SCRIPT_FILES.map((seed, index) => ({
     path: seed.path,
     content: seed.content,
     mtime: Math.floor((now - seed.daysAgo * DAY_MS) / 1000),
+    // 创建时间：约 6 周前陆续上传，清单越靠前越晚、间隔 5 小时；都早于修改时间，先后顺序也和修改时间不同
+    btime: Math.floor((now - 42 * DAY_MS - index * 5 * HOUR_MS) / 1000),
   }))
 }
 

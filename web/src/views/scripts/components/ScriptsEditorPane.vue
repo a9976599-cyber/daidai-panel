@@ -130,6 +130,51 @@ const lineCountLabel = computed(() => {
   return `${count} 行`;
 });
 
+// 图片预览：MIME 按扩展名映射，不用后端的 mime 字段（Alpine 上 ico/bmp 可能给 octet-stream）
+const IMAGE_MIME_MAP: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  bmp: "image/bmp",
+  ico: "image/x-icon",
+};
+const imageFailed = ref(false);
+const imageSize = ref<{ width: number; height: number } | null>(null);
+const imageViewerVisible = ref(false);
+
+const imageSrc = computed(() => {
+  if (!props.isBinary || !fileContent.value) return "";
+  const ext = props.selectedFile.split(".").pop()?.toLowerCase() || "";
+  const mime = IMAGE_MIME_MAP[ext];
+  return mime ? `data:${mime};base64,${fileContent.value}` : "";
+});
+
+// 换了文件就清掉上一张图的失败标记和尺寸
+watch(imageSrc, () => {
+  imageFailed.value = false;
+  imageSize.value = null;
+  imageViewerVisible.value = false;
+});
+
+const imageInfoLabel = computed(() => {
+  // content 是 base64，按长度换算回原始字节数
+  const b64 = fileContent.value || "";
+  const padding = b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0;
+  const bytes = Math.floor((b64.length * 3) / 4) - padding;
+  let sizeText = `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes < 1024) sizeText = `${bytes} B`;
+  else if (bytes < 1024 * 1024) sizeText = `${(bytes / 1024).toFixed(1)} KB`;
+  if (!imageSize.value) return sizeText;
+  return `${imageSize.value.width}×${imageSize.value.height} · ${sizeText}`;
+});
+
+function onImageLoad(event: Event) {
+  const img = event.target as HTMLImageElement;
+  imageSize.value = { width: img.naturalWidth, height: img.naturalHeight };
+}
+
 function startEdit() {
   isEditing.value = true;
 }
@@ -402,11 +447,12 @@ watch(
             </nav>
             <div class="file-title-row">
               <h1 class="file-title" :title="selectedFile">{{ fileName }}</h1>
-              <span v-if="languageLabel" class="file-pill file-pill--lang">{{
+              <!-- 二进制（含图片）不显示语言标签，类型由旁边的「二进制 / 图片」标签说明 -->
+              <span v-if="languageLabel && !isBinary" class="file-pill file-pill--lang">{{
                 languageLabel
               }}</span>
               <span v-if="isBinary" class="file-pill file-pill--binary"
-                >二进制</span
+                >{{ imageSrc && !imageFailed ? "图片" : "二进制" }}</span
               >
               <span
                 v-else-if="fileSizeLabel && !isMobile"
@@ -676,7 +722,28 @@ watch(
 
       <!-- Editor body -->
       <div class="editor-body animate-fade-in-up delay-50" v-loading="loading">
-        <div v-if="isBinary" class="binary-card">
+        <!-- 图片文件直接预览；解码失败回落到下面的二进制卡片 -->
+        <div v-if="isBinary && imageSrc && !imageFailed" class="image-preview">
+          <div class="image-preview-stage">
+            <img
+              :src="imageSrc"
+              :alt="fileName"
+              class="image-preview-img"
+              @load="onImageLoad"
+              @error="imageFailed = true"
+              @click="imageViewerVisible = true"
+            />
+          </div>
+          <div class="image-preview-meta">{{ imageInfoLabel }}</div>
+          <el-image-viewer
+            v-if="imageViewerVisible"
+            :url-list="[imageSrc]"
+            teleported
+            hide-on-click-modal
+            @close="imageViewerVisible = false"
+          />
+        </div>
+        <div v-else-if="isBinary" class="binary-card">
           <div class="binary-card-title">二进制文件</div>
           <p class="binary-card-text">
             该文件为二进制格式，无法在线编辑。可通过右上角「更多 →
@@ -1251,6 +1318,49 @@ watch(
     color: var(--el-text-color-secondary);
     margin: 0;
     line-height: 1.55;
+  }
+}
+
+.image-preview {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 24px;
+
+  .image-preview-stage {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+  }
+
+  // 绝对定位 + max 尺寸：等比缩小适应区域，小图保持原尺寸不放大
+  .image-preview-img {
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    max-width: 100%;
+    max-height: 100%;
+    cursor: zoom-in;
+    border: 1px solid var(--el-border-color-lighter);
+    // 透明图垫棋盘格底
+    background-color: var(--el-bg-color);
+    background-image:
+      linear-gradient(45deg, var(--el-fill-color-dark) 25%, transparent 25%),
+      linear-gradient(-45deg, var(--el-fill-color-dark) 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, var(--el-fill-color-dark) 75%),
+      linear-gradient(-45deg, transparent 75%, var(--el-fill-color-dark) 75%);
+    background-size: 16px 16px;
+    background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  }
+
+  .image-preview-meta {
+    flex-shrink: 0;
+    text-align: center;
+    font-size: 12px;
+    font-family: var(--dd-font-mono);
+    color: var(--el-text-color-secondary);
   }
 }
 
