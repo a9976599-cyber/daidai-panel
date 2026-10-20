@@ -6180,3 +6180,9 @@ _ = database.DB.Transaction(func(tx *gorm.DB) error {
     return nil
 })
 ```
+
+## 订阅列表的 `next_pull_at`（v3.3.8，#163）
+
+- `GET /subscriptions` 每项只在「启用 + 定时非空 + 整串能被 `ParseSchedule` 解析」时带 `next_pull_at`，其余不带这个键，前端显示 `-`。
+- 用 `panelcron.NextRunTimes(schedule, 1)`，**不要换成 `NextRunTimesForExpressions`**：后者按行拆分，而订阅调度器 `AddOrUpdateJob` 把整串交给 `ParseSchedule`、不拆行，多行规则在调度器里注册失败、根本不会触发；拆行就会显示一个永远不会到的时间。任务的 `next_run_at` 用拆行版本，是因为任务本身支持多条定时规则。
+- 演示站 `web/src/demo/adapter.ts` 的 `GET /subscriptions` 同口径现算，规则含换行就不给。
