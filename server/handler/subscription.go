@@ -10,6 +10,7 @@ import (
 	"daidai-panel/database"
 	"daidai-panel/middleware"
 	"daidai-panel/model"
+	panelcron "daidai-panel/pkg/cron"
 	"daidai-panel/pkg/response"
 	"daidai-panel/service"
 
@@ -166,6 +167,14 @@ func (h *SubscriptionHandler) List(c *gin.Context) {
 	data := make([]map[string]interface{}, len(subs))
 	for i, s := range subs {
 		data[i] = s.ToDict()
+		// 下次拉取时间（issue #163）：只在「启用 + 定时规则非空 + 能解析」时下发，其余情况不带这个键。
+		// 口径与订阅调度器 AddOrUpdateJob 完全一致：整串交给 ParseSchedule（5 段 / 6 段都认），
+		// 不按行拆分——调度器本身就不拆，多行规则在那里注册失败、根本不会触发，这里也就不该显示时间。
+		if s.Enabled && strings.TrimSpace(s.Schedule) != "" {
+			if nextTimes := panelcron.NextRunTimes(s.Schedule, 1); len(nextTimes) > 0 {
+				data[i]["next_pull_at"] = nextTimes[0]
+			}
+		}
 	}
 
 	response.Paginated(c, data, total, page, pageSize)

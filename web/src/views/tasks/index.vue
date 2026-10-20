@@ -49,6 +49,8 @@ const { isMobile, width: viewportWidth } = useResponsive()
 // 再算上侧栏 218px 与 .layout-main 的左右 20px 内边距，窗口宽 <1600 时弹性列就开始被压到下限，
 // 命令/标签/定时规则接连换行，行高从 ~50px 涨到 100~190px（1280×720 下只剩 3~4 行可见）。
 // 典型受害者是 14 寸笔记本 1920×1080 + 150% 系统缩放 = 等效 1280×720。
+// v3.3.8（issue #163）把「最后运行」「下次运行」两列（各 160）合成一列「运行时间」（184），宽桌面固定列少了 136px；
+// 阈值没跟着重算，仍按 1600 切换——窄桌面要省的主要是「耗时」与名称标签，这条线本身没变。
 const isNarrowDesktop = computed(() => !isMobile.value && viewportWidth.value < 1600)
 const { isPageActive } = usePageActivity()
 let statusTimer: ReturnType<typeof setInterval> | null = null
@@ -156,7 +158,7 @@ const logFilesTaskName = ref('')
 const viewFilters = ref<TaskViewFilter[]>([])
 const viewSortRules = ref<TaskViewSortRule[]>([])
 // 工具栏快捷排序：null 表示走后端默认排序（置顶+状态分组），非空时优先于视图自带排序。
-// 「定时规则 / 最后运行 / 下次运行」三列的表头点击排序也写在这一条状态上，不另起一份，
+// 「定时规则 / 运行时间」两列的表头点击排序也写在这一条状态上，不另起一份，
 // 否则表头箭头与工具栏按钮文案会各说各话。
 const quickSort = ref<{ field: string; direction: 'asc' | 'desc' } | null>(null)
 const canOperateTasks = computed(() => canOperate(authStore.user?.role))
@@ -188,7 +190,7 @@ function handleViewChange(filters: TaskViewFilter[], sortRules: TaskViewSortRule
   viewFilters.value = filters
   viewSortRules.value = sortRules
   page.value = 1
-  // 快捷排序被清掉了，表头箭头也要一起收回去，否则会出现「表头还指着最后运行、实际按视图规则排」
+  // 快捷排序被清掉了，表头箭头也要一起收回去，否则会出现「表头还指着运行时间、实际按视图规则排」
   syncTableSortIndicator()
   void loadTasks()
 }
@@ -218,13 +220,14 @@ function isScheduleFault(task: any) {
 
 const hasRunningTasks = computed(() => tasks.value.some(t => t.status === 2))
 
-// 可以点表头排序的三列。表头点击与下拉选项写的是同一条 quickSort 状态，
+// 可以点表头排序的两列：「定时规则」与「运行时间」（后者按下次运行排）。表头点击与下拉选项写的是同一条 quickSort 状态，
 // 这份名单用来判断「当前排序该不该在表头上画箭头」。
-const taskColumnSortFields = ['cron_expression', 'last_run_at', 'next_run_at']
+// last_run_at 不在名单里：「运行时间」一列同时显示上次 / 下次，表头只能对应一个排序字段，选了 next_run_at。
+const taskColumnSortFields = ['cron_expression', 'next_run_at']
 
 // 快捷排序可选项：value 为 null 表示恢复默认排序，其余对应后端 sort_rules 的单条规则。
-// 「最后运行 / 下次运行」四项是表头排序的替代入口：窄桌面（<1600px）「最后运行」整列被 v-if 掉了，
-// 没有这几项的话那档视口下根本点不到这个排序。
+// 「最后运行」两项是按上次运行排序的唯一入口（issue #163 起合并成「运行时间」一列，表头点击按下次运行排）；
+// 「下次运行」两项与表头点击等价，留着给移动端卡片（没有表头）用。
 // 「定时规则」两项（issue #151）按每天最早一次执行的时刻排（后端 cron_expression 规则 v3.3.3 起的口径），
 // 与「下次运行」不同：它不随「现在几点」轮转，周一 09:00 与每天 09:00 挨在一起，方便看哪个时段扎堆；
 // 手动 / 开机运行等没有时刻的任务恒排本区最后，不随升降序翻转。移动端卡片没有表头，只能从这里选。
@@ -288,22 +291,16 @@ let syncingTableSort = false
 /**
  * 把 quickSort 同步到表头箭头。
  *
- * 只有「定时规则 / 最后运行 / 下次运行」三列画得出箭头，其余排序（含默认排序、视图自带排序）一律 clearSort()——
+ * 只有「定时规则 / 运行时间」两列画得出箭头，其余排序（含默认排序、视图自带排序、按最后运行排）一律 clearSort()——
  * 不收回去的话表头会一直指着上一次点的那一列，和实际排序对不上。
  * clearSort 内部是 silent 提交，不会触发 @sort-change，可以直接调。
- *
- * ⚠️ 「最后运行」列在窄桌面被 v-if 掉了，此时 el-table 里根本没有这一列，
- *    sort() 找不到列会静默什么都不做（连箭头都不画），所以先判一次列是否真的渲染出来。
- *    「定时规则」「下次运行」两档桌面都渲染。
+ * 这两列在窄桌面和常规桌面都渲染（v3.3.8 起不再有被 v-if 掉的可排序列），所以不用再判列是否存在。
  */
 function syncTableSortIndicator() {
   const table = taskTableRef.value
   if (!table) return
   const field = quickSort.value?.field || ''
-  const columnRendered = field === 'next_run_at'
-    || field === 'cron_expression'
-    || (field === 'last_run_at' && !isNarrowDesktop.value)
-  if (taskColumnSortFields.includes(field) && columnRendered) {
+  if (taskColumnSortFields.includes(field)) {
     syncingTableSort = true
     table.sort?.(field, quickSort.value?.direction === 'desc' ? 'descending' : 'ascending')
     syncingTableSort = false
@@ -2082,7 +2079,7 @@ async function handleImport(event: Event) {
             </code>
           </template>
         </el-table-column>
-        <!-- 表头可点排序（issue #151）：写法同下方「最后运行 / 下次运行」，sortable="custom" 只出箭头、交给后端排。
+        <!-- 表头可点排序（issue #151）：写法同下方「运行时间」，sortable="custom" 只出箭头、交给后端排。
              按每天最早一次执行的时刻比较，不是按表达式字符串；口径见 quickSortOptions 那两项的注释。
              窄桌面加了排序箭头后，这一格在 101px 以下会折成两行，但按 90:70:95 的比例那时「命令 / 脚本」列
              （表头要 89px、下限 70）早已折行，整行表头高度不变，所以不需要为它加 nowrap 或调宽；调宽反而会把命令列挤到折行。 -->
@@ -2119,47 +2116,45 @@ async function handleImport(event: Event) {
             </Transition>
           </template>
         </el-table-column>
-        <!-- 窄桌面隐藏「最后运行」「耗时」：这两列固定占 250px，是把弹性列压到下限的主因。
-             信息没丢——任务详情弹窗里都有，「下次运行」「上次结果」这两个更常看的仍然保留。
-             ⚠️ 这一列被 v-if 掉时表头上就没有「最后运行」可点了，替代入口在工具栏排序下拉里
-             （quickSortOptions 的 last_run_* 两项），改这里记得同步那边。
-             sortable="custom" = 只出箭头、排序交给后端；prop 就是后端 sort_rules 的 field 名，
-             @sort-change 把它写进 quickSort（不另起一份排序状态）。 -->
-        <el-table-column
-          v-if="!isNarrowDesktop"
-          prop="last_run_at"
-          label="最后运行"
-          width="160"
-          align="center"
-          sortable="custom"
-        >
-          <template #default="{ row }">
-            <span v-if="row.last_run_at" class="time-text">{{ formatTime(row.last_run_at) }}</span>
-            <span v-else class="text-muted">-</span>
-          </template>
-        </el-table-column>
+        <!-- 「运行时间」（issue #163）：原来的「最后运行」「下次运行」两列合成一列，单元格上下两行「上次 / 下次」。
+             原先窄桌面（<1600px）为省宽把「最后运行」整列 v-if 掉了，报告人在窄屏上就看不到上次运行；
+             合并后一列 184px 两档桌面都显示。宽度这么算：一行最长是「下次」(12px×2=24) + 间距 6 +
+             `MM-DD HH:mm:ss` 14 个等宽字符（JetBrains Mono 13px 约 7.8px/字，≈109）+ 间距 4 + schedule_hint 图标 14 ≈ 157px，
+             再加 .cell 左右各 12px 内边距 = 181px，取 184 留一点字体回落的余量；两行都 nowrap，宁可贴边也不折行。
+             比原来窄桌面单列「下次运行」的 160 多 24px，宽桌面则比两列合计 320 省出 136px。
+             sortable="custom" = 只出箭头、排序交给后端；prop 用 next_run_at（后端 sort_rules 的 field 名），
+             @sort-change 把它写进 quickSort（不另起一份排序状态）。按最后运行排序走工具栏排序下拉（quickSortOptions 的 last_run_* 两项）。 -->
         <el-table-column
           prop="next_run_at"
-          label="下次运行"
-          width="160"
+          label="运行时间"
+          width="184"
           align="center"
           sortable="custom"
         >
           <template #default="{ row }">
-            <div class="next-run-cell">
-              <span v-if="row.next_run_at" class="time-text">{{ formatTime(row.next_run_at) }}</span>
-              <span v-else class="text-muted">-</span>
-              <!-- schedule_hint 由后端下发，正常时是空串。它专治 issue #115 那种「看着一切正常、实际不会触发」：
-                   任务显示已启用、下次运行也有时间，但调度器里根本没有它（或者它压根不是 cron 类型）。
-                   不做成 el-tag 是因为这一列只有 160px，塞不下一枚标签；图标 + tooltip 是这里唯一装得下的形态。
-                   分两种严重程度：定时任务没注册上是真故障（橙色警示），
-                   手动 / 开机运行只是在陈述任务类型（灰色信息），后者用警示色就是天天喊狼来了。 -->
-              <el-tooltip v-if="row.schedule_hint" :content="row.schedule_hint" placement="top">
-                <el-icon :class="['schedule-hint-icon', isScheduleFault(row) ? 'schedule-hint-icon--fault' : 'schedule-hint-icon--info']">
-                  <WarningFilled v-if="isScheduleFault(row)" />
-                  <InfoFilled v-else />
-                </el-icon>
-              </el-tooltip>
+            <div class="run-time-cell">
+              <div class="run-time-cell__line">
+                <span class="run-time-cell__label">上次</span>
+                <span v-if="row.last_run_at" class="time-text">{{ formatTime(row.last_run_at) }}</span>
+                <span v-else class="text-muted">-</span>
+              </div>
+              <div class="run-time-cell__line">
+                <span class="run-time-cell__label">下次</span>
+                <span v-if="row.next_run_at" class="time-text">{{ formatTime(row.next_run_at) }}</span>
+                <span v-else class="text-muted">-</span>
+                <!-- schedule_hint 由后端下发，正常时是空串。它专治 issue #115 那种「看着一切正常、实际不会触发」：
+                     任务显示已启用、下次运行也有时间，但调度器里根本没有它（或者它压根不是 cron 类型）。
+                     不做成 el-tag 是因为一行只剩十几像素，塞不下一枚标签；图标 + tooltip 是这里唯一装得下的形态。
+                     它说的是「下次会不会触发」，所以跟在「下次」这一行。
+                     分两种严重程度：定时任务没注册上是真故障（橙色警示），
+                     手动 / 开机运行只是在陈述任务类型（灰色信息），后者用警示色就是天天喊狼来了。 -->
+                <el-tooltip v-if="row.schedule_hint" :content="row.schedule_hint" placement="top">
+                  <el-icon :class="['schedule-hint-icon', isScheduleFault(row) ? 'schedule-hint-icon--fault' : 'schedule-hint-icon--info']">
+                    <WarningFilled v-if="isScheduleFault(row)" />
+                    <InfoFilled v-else />
+                  </el-icon>
+                </el-tooltip>
+              </div>
             </div>
           </template>
         </el-table-column>
@@ -2177,6 +2172,7 @@ async function handleImport(event: Event) {
             </div>
           </template>
         </el-table-column>
+        <!-- 窄桌面隐藏「耗时」：信息没丢，任务详情弹窗里有。 -->
         <el-table-column v-if="!isNarrowDesktop" label="耗时" width="90" align="center">
           <template #default="{ row }">
             <span v-if="row.last_running_time != null" class="time-text">{{ formatDuration(row.last_running_time) }}</span>
@@ -2646,19 +2642,39 @@ async function handleImport(event: Event) {
   color: var(--el-text-color-placeholder);
 }
 
-// 「下次运行」格：时间 + 可能存在的 schedule_hint 警示图标并排一行。
-// 桌面表格那一列是 align="center"，所以整块也居中。
+// 移动端卡片的「下次运行」值：时间 + 可能存在的 schedule_hint 警示图标并排一行，靠左排。
+// 桌面表格 v3.3.8 起改用下面的 .run-time-cell，这个类只剩卡片在用。
 .next-run-cell {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 4px;
 }
 
-// 移动端卡片里这一格是「标签 值」横排行的值，靠左排，不能跟着居中。
-// 用「两个类同时命中」而不是媒体查询：卡片布局由 isMobile 决定渲染哪一套 DOM，不由视口宽度决定样式。
-.dd-mobile-card__row-value.next-run-cell {
-  justify-content: flex-start;
+// 桌面「运行时间」格（issue #163）：上下两行「上次 / 下次」。
+// 列是 align="center"，整块用 inline-flex 跟着居中；块内两行左对齐，「上次」「下次」两个前缀才能对成一条竖线。
+.run-time-cell {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  vertical-align: middle;
+}
+
+.run-time-cell__line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  line-height: 18px;
+  // 宽度按一行最长内容算好了（见模板注释），不允许折行
+  white-space: nowrap;
+}
+
+// 前缀用小号灰字，和时间本身拉开层级
+.run-time-cell__label {
+  margin-right: 2px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 
 .schedule-hint-icon {

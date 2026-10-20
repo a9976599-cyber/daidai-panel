@@ -1617,6 +1617,14 @@ function viewLogDetail(log: any) {
               formatDateTime(row.last_pull_at)
             }}</span>
           </div>
+          <!-- issue #163：下次拉取时间由后端按调度器同一口径现算（next_pull_at），
+               禁用、没设定时或规则解析不了时不下发，formatDateTime 回落 '-'。 -->
+          <div class="dd-mobile-card__row">
+            <span class="dd-mobile-card__row-label">下次拉取</span>
+            <span class="dd-mobile-card__row-value dd-mono">{{
+              formatDateTime(row.next_pull_at)
+            }}</span>
+          </div>
         </div>
 
         <!--
@@ -1771,12 +1779,28 @@ function viewLogDetail(log: any) {
             </Transition>
           </template>
         </el-table-column>
-        <el-table-column prop="last_pull_at" label="最后拉取" width="150">
+        <!-- 「拉取时间」（issue #163）：原「最后拉取」列加一行下次拉取，上下两行「上次 / 下次」，写法同定时任务页的「运行时间」。
+             next_pull_at 由后端按调度器同一口径现算，禁用 / 没设定时 / 规则解析不了时不下发，显示 -。
+             宽度：前缀 12px×2=24 + 间距 6 + `YYYY-MM-DD HH:mm:ss` 19 个等宽字符（JetBrains Mono 12px 约 7.2px/字，≈137）
+             ≈ 167px，加 .cell 左右各 12px 内边距 = 191，取 192；两行都 nowrap 不折行。 -->
+        <el-table-column label="拉取时间" width="192">
           <template #default="{ row }">
-            <span v-if="row.last_pull_at" class="time-text">{{
-              formatDateTime(row.last_pull_at)
-            }}</span>
-            <span v-else class="text-muted">-</span>
+            <div class="pull-time-cell">
+              <div class="pull-time-cell__line">
+                <span class="pull-time-cell__label">上次</span>
+                <span v-if="row.last_pull_at" class="time-text">{{
+                  formatDateTime(row.last_pull_at)
+                }}</span>
+                <span v-else class="text-muted">-</span>
+              </div>
+              <div class="pull-time-cell__line">
+                <span class="pull-time-cell__label">下次</span>
+                <span v-if="row.next_pull_at" class="time-text">{{
+                  formatDateTime(row.next_pull_at)
+                }}</span>
+                <span v-else class="text-muted">-</span>
+              </div>
+            </div>
           </template>
         </el-table-column>
         <!--
@@ -2723,6 +2747,24 @@ function viewLogDetail(log: any) {
 }
 .text-muted {
   color: var(--el-text-color-placeholder);
+}
+// 「拉取时间」格：上下两行「上次 / 下次」，前缀小号灰字
+.pull-time-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.pull-time-cell__line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.pull-time-cell__label {
+  margin-right: 2px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 // 操作列：与定时任务页/执行日志页一致的轻量行内按钮组
 .action-btns {

@@ -19,6 +19,7 @@ import {
   buildTaskGroups,
   buildTaskLabels,
   db,
+  estimateNextRun,
   executeDemoTaskScriptDeletion,
   filterEnvs,
   filterLogs,
@@ -2228,7 +2229,17 @@ route('GET', '/subscriptions', (ctx) => {
     const enabled = enabledRaw.toLowerCase() === 'true' || enabledRaw === '1'
     rows = rows.filter((sub) => sub.enabled === enabled)
   }
-  return paginate([...rows].sort((left, right) => right.created_at.localeCompare(left.created_at)), ctx.params)
+  // 下次拉取时间（issue #163），与后端 handler.List 同口径：只有「启用 + 定时非空 + 能解析」才给。
+  // 后端调度器不按行拆分，多行规则注册不上、不会触发，所以这里含换行的也不给（estimateNextRun 自己会取首行）。
+  // next_pull_at 不是库里的列，现算后挂在返回副本上，不写回 db()。
+  const now = Date.now()
+  const items = rows.map((sub) => {
+    const schedule = (sub.schedule ?? '').trim()
+    if (!sub.enabled || !schedule || /[\r\n]/.test(schedule)) return sub
+    const next = estimateNextRun(schedule, now)
+    return next ? { ...sub, next_pull_at: next } : sub
+  })
+  return paginate(items.sort((left, right) => right.created_at.localeCompare(left.created_at)), ctx.params)
 })
 
 /**
