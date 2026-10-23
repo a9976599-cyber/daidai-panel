@@ -20,7 +20,7 @@ const (
 // legacyDefaultPipMirrors 是 v3.3.2 之前的 pip 默认源。
 //
 // 它只服务于「旧默认源一次性迁移」（issue #146）：存量用户的 pip.conf 里实打实存着阿里云字符串，
-// 光改 DefaultPipMirror 对他们毫无作用（isOfficialPipMirror 不认阿里云，会当成用户自己选的源保留）。
+// 光改 DefaultPipMirror 对他们毫无作用（非空的源都当成用户自己选的原样保留）。
 // 判定收在 legacyDefaultMirrorMigrationPending() 后面，保证只搬一次，见该函数的说明。
 var legacyDefaultPipMirrors = []string{
 	"https://mirrors.aliyun.com/pypi/simple",
@@ -42,11 +42,15 @@ func EffectivePipMirror(configured string) string {
 	return mirror
 }
 
-// normalizePipMirrorForWrite 是 v3.3.2 之前 EffectivePipMirror 的原样逻辑：空或 pypi 官方源回落默认加速源。
+// normalizePipMirrorForWrite 只把「留空」回落到默认加速源，其余写法（包括 pypi 官方源）原样返回。
 // 抽出来是为了让「存盘」与「读生效值」两条路分开 —— 只有后者参与旧默认源迁移。
+//
+// v3.3.9 起官方源不再回落（issue #165）：以前 pypi.org / pypi.python.org 和留空一样被换成默认加速源，
+// 用户在页面上选了官方源，存进 pip.conf 的却是腾讯云，等于官方源这个选项永远选不上。
+// 海外机器、或者镜像同步滞后时，用户就是要直连官方源，必须原样存、原样生效。
 func normalizePipMirrorForWrite(configured string) string {
 	mirror := strings.TrimSpace(configured)
-	if mirror == "" || isOfficialPipMirror(mirror) {
+	if mirror == "" {
 		return DefaultPipMirror
 	}
 	return mirror
@@ -65,7 +69,8 @@ func isLegacyDefaultPipMirror(mirror string) bool {
 // ---------- v3.3.2 旧默认镜像源的一次性迁移开关（issue #146）----------
 //
 // 要解决的事：默认源从阿里云换成腾讯云之后，存量用户的 pip.conf / sources.list 里存的仍是阿里云字符串，
-// 而阿里云不是官方源，isOfficialPipMirror / isOfficialLinuxMirror 都会把它当成「用户自己选的」而不动 ——
+// 而阿里云不是留空也不是官方源，pip 侧的 normalizePipMirrorForWrite 与 Linux 侧的 isOfficialLinuxMirror
+// 都会把它当成「用户自己选的」而不动 ——
 // issue #146 的报告人正是这批人，光改默认常量对他们等于没改。
 //
 // 但这种「等于旧默认就搬走」的判定绝不能常驻：用户日后主动选回阿里云，下次装包又会被静默改走，
@@ -133,9 +138,12 @@ func MarkDependencyMirrorChoiceSaved() {
 	}
 }
 
+// EffectiveNpmMirror 只把「留空」回落到默认加速源。
+// npm 官方源 registry.npmjs.org 和 pip 一样原样保留（issue #165 同一个根因：以前会被换成 npmmirror，
+// 用户选了官方源也存不进 .npmrc）。
 func EffectiveNpmMirror(configured string) string {
 	mirror := normalizeNpmMirror(configured)
-	if mirror == "" || isOfficialNpmMirror(mirror) {
+	if mirror == "" {
 		return normalizeNpmMirror(DefaultNpmMirror)
 	}
 	return mirror
@@ -303,22 +311,8 @@ func CurrentEffectiveNpmMirror() string {
 	return EffectiveNpmMirror(CurrentNpmMirror())
 }
 
-func isOfficialPipMirror(mirror string) bool {
-	mirror = strings.TrimRight(strings.ToLower(strings.TrimSpace(mirror)), "/")
-	switch mirror {
-	case "https://pypi.org/simple", "http://pypi.org/simple",
-		"https://pypi.python.org/simple", "http://pypi.python.org/simple":
-		return true
-	default:
-		return false
-	}
-}
-
-func isOfficialNpmMirror(mirror string) bool {
-	mirror = normalizeNpmMirror(mirror)
-	return mirror == "https://registry.npmjs.org/"
-}
-
+// v3.3.9 删掉了 isOfficialPipMirror / isOfficialNpmMirror：它们唯一的用途就是把官方源换成默认加速源，
+// issue #165 起官方源原样保留，这两个判定没有调用方了。Linux 源的 isOfficialLinuxMirror 另有用途，不受影响。
 func normalizeNpmMirror(mirror string) string {
 	mirror = strings.TrimSpace(mirror)
 	if mirror == "" {

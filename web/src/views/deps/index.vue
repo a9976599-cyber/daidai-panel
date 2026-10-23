@@ -885,6 +885,10 @@
                       command="https://mirrors.ctyun.cn/pypi/simple"
                       >天翼云</el-dropdown-item
                     >
+                    <!-- issue #165 / v3.3.9：后端不再把官方源换成默认加速源，这里给个直达选项（海外机器直连更快）。 -->
+                    <el-dropdown-item command="https://pypi.org/simple"
+                      >PyPI 官方</el-dropdown-item
+                    >
                     <el-dropdown-item command=""
                       >恢复默认加速源</el-dropdown-item
                     >
@@ -918,6 +922,10 @@
                     <el-dropdown-item
                       command="https://repo.huaweicloud.com/repository/npm/"
                       >华为云</el-dropdown-item
+                    >
+                    <!-- issue #165 同一个根因：npm 官方源现在也原样保存、原样生效。 -->
+                    <el-dropdown-item command="https://registry.npmjs.org/"
+                      >npm 官方</el-dropdown-item
                     >
                     <el-dropdown-item command=""
                       >恢复默认加速源</el-dropdown-item
