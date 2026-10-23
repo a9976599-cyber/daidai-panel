@@ -1879,11 +1879,21 @@ func RecordAutoInstalledDepForPythonVersion(depType, name, installLog, pythonVer
 		found = database.DB.Where("type = ? AND name = ?", depType, name).First(&existing).Error == nil
 	}
 	if found {
-		database.DB.Model(&existing).Updates(map[string]interface{}{
+		updates := map[string]interface{}{
 			"status":         model.DepStatusInstalled,
 			"log":            installLog,
 			"python_version": pythonVersion,
-		})
+		}
+		// issue #166：已有 httpx 记录、这次自动装的是 httpx[http2] 时，名字要一起改成带 extras 的写法。
+		// 只改状态不改名的话，重建容器后按旧名字 httpx 重装，h2 又丢了，脚本照样报错。
+		// 旧名字的 extras 已经覆盖本次写法（比如旧的是 httpx[http2]、这次只是 httpx）就不动，免得把 extras 改丢。
+		// 改名时用合并后的写法而不是整串换成本次写法：旧记录里的版本锁定（httpx==0.27.0）和已有 extras
+		// （httpx[socks]）同样是重建容器重装时要用的，整串替换会把它们丢掉。这里只改登记名，
+		// pip 这次实际执行的仍是自动安装候选的写法。
+		if depType == model.DepTypePython && !PythonExtrasCovered(existing.Name, name) {
+			updates["name"] = MergePythonSpecExtras(existing.Name, name)
+		}
+		database.DB.Model(&existing).Updates(updates)
 		return
 	}
 	dep := model.Dependency{

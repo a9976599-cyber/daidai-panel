@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"daidai-panel/database"
+	"daidai-panel/model"
 	"daidai-panel/testutil"
 )
 
@@ -91,6 +93,36 @@ func TestDetectAutoInstallCandidate(t *testing.T) {
 		}
 	})
 
+	// issue #166：httpx 缺 h2 时的原文报错，提示里的 extras 必须一起捕获，否则只装了 httpx、h2 仍然缺。
+	t.Run("python hint keeps extras from httpx h2 error", func(t *testing.T) {
+		output := "ImportError: Using http2=True, but the 'h2' package is not installed. " +
+			"Make sure to install httpx using `pip install httpx[http2]`."
+		candidate := DetectAutoInstallCandidate(".py", output, t.TempDir())
+		if candidate == nil {
+			t.Fatal("expected python candidate from httpx h2 hint")
+		}
+		if candidate.PackageName != "httpx[http2]" || candidate.RecordName != "httpx[http2]" {
+			t.Fatalf("expected httpx[http2] with extras kept, got %+v", candidate)
+		}
+	})
+
+	t.Run("python hint keeps quoted extras", func(t *testing.T) {
+		cases := []struct{ output, want string }{
+			{`请运行: pip install "httpx[http2]"`, "httpx[http2]"},
+			{`请运行: pip3 install 'httpx[http2,socks]'`, "httpx[http2,socks]"},
+			{`请运行: pip install "requests"`, "requests"},
+		}
+		for _, tc := range cases {
+			candidate := DetectAutoInstallCandidate(".py", tc.output, t.TempDir())
+			if candidate == nil {
+				t.Fatalf("expected python candidate for %q", tc.output)
+			}
+			if candidate.PackageName != tc.want {
+				t.Fatalf("output %q: expected %q, got %q", tc.output, tc.want, candidate.PackageName)
+			}
+		}
+	})
+
 	t.Run("node native error takes priority over hint", func(t *testing.T) {
 		output := "Error: Cannot find module 'axios'\nnpm install axios to fix"
 		candidate := DetectAutoInstallCandidate(".js", output, t.TempDir())
@@ -110,6 +142,57 @@ func TestDetectAutoInstallCandidate(t *testing.T) {
 			t.Fatalf("expected nil for local .so file, got %+v", candidate)
 		}
 	})
+}
+
+// issue #166：已有 httpx 记录，自动安装装的是 httpx[http2] 时，登记要连名字一起改成带 extras 的写法，
+// 否则重建容器后按旧名字重装又会丢掉 h2。仍是一包一条，不新建记录。
+func TestRecordAutoInstalledDepRenamesWhenExtrasNotCovered(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	// 旧记录带版本锁定：改名要合并成 httpx[http2]==0.27.0，不能整串换成 httpx[http2] 把锁定丢掉。
+	existing := model.Dependency{Type: model.DepTypePython, Name: "httpx==0.27.0", PythonVersion: "3.12", Status: model.DepStatusInstalled}
+	if err := database.DB.Create(&existing).Error; err != nil {
+		t.Fatalf("seed dependency: %v", err)
+	}
+
+	RecordAutoInstalledDepForPythonVersion(model.DepTypePython, "httpx[http2]", "install log", "3.12")
+
+	var stored []model.Dependency
+	if err := database.DB.Where("type = ?", model.DepTypePython).Find(&stored).Error; err != nil {
+		t.Fatalf("reload dependencies: %v", err)
+	}
+	if len(stored) != 1 {
+		t.Fatalf("expected still one python dependency row, got %+v", stored)
+	}
+	if stored[0].ID != existing.ID || stored[0].Name != "httpx[http2]==0.27.0" {
+		t.Fatalf("expected existing row renamed to merged httpx[http2]==0.27.0, got %+v", stored[0])
+	}
+	if stored[0].Status != model.DepStatusInstalled || stored[0].Log != "install log" {
+		t.Fatalf("expected status/log updated as before, got %+v", stored[0])
+	}
+}
+
+// 反向守住：旧名字的 extras 已经覆盖本次写法时不改名，免得把 httpx[http2] 改回 httpx、丢掉 extras。
+func TestRecordAutoInstalledDepKeepsNameWhenExtrasCovered(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	existing := model.Dependency{Type: model.DepTypePython, Name: "httpx[http2]", PythonVersion: "3.12", Status: model.DepStatusFailed}
+	if err := database.DB.Create(&existing).Error; err != nil {
+		t.Fatalf("seed dependency: %v", err)
+	}
+
+	RecordAutoInstalledDepForPythonVersion(model.DepTypePython, "httpx", "install log", "3.12")
+
+	var stored model.Dependency
+	if err := database.DB.First(&stored, existing.ID).Error; err != nil {
+		t.Fatalf("reload dependency: %v", err)
+	}
+	if stored.Name != "httpx[http2]" {
+		t.Fatalf("expected name kept as httpx[http2], got %q", stored.Name)
+	}
+	if stored.Status != model.DepStatusInstalled {
+		t.Fatalf("expected status installed, got %q", stored.Status)
+	}
 }
 
 // 回归：v2.2.4 重构托管 venv bootstrap 时漏了 venvDir 参数，导致 venv 永远建不出来，

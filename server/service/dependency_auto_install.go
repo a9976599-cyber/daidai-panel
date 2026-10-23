@@ -15,7 +15,7 @@ var (
 	autoInstallNodeModuleRe = regexp.MustCompile(`(?:Cannot find module|Error \[ERR_MODULE_NOT_FOUND\].*)\s*'([^']+)'`)
 	autoInstallNodeHintRe   = regexp.MustCompile(`npm\s+install\s+([a-zA-Z@][a-zA-Z0-9_./@-]*)`)
 	autoInstallPyModuleRe   = regexp.MustCompile(`(?:ModuleNotFoundError|ImportError):\s*No module named\s+'([^']+)'`)
-	autoInstallPyHintRe     = regexp.MustCompile(`pip3?\s+install\s+([a-zA-Z][a-zA-Z0-9_.@-]*)`)
+	autoInstallPyHintRe     = regexp.MustCompile(`pip3?\s+install\s+["']?([a-zA-Z][a-zA-Z0-9_.@-]*(?:\[[a-zA-Z0-9_.,\s-]*\])?)`)
 	autoInstallGoModuleRe   = regexp.MustCompile(`(?:no required module provides package|missing go\.sum entry for module providing package)\s+([^\s:;]+)`)
 
 	thirdPartyExcludedModules = map[string]bool{
@@ -70,6 +70,11 @@ func DetectAutoInstallCandidate(ext, output, workDir string) *AutoInstallCandida
 				RecordName:    packageName,
 			}
 		}
+		// autoInstallPyHintRe 连 extras 一起捕获（issue #166）：httpx 缺 h2 时的提示是
+		// `pip install httpx[http2]`，以前字符集不含 `[`，被截成 httpx，装完 h2 仍然缺。
+		// 包名前允许一个引号，兼容 `pip install "httpx[http2]"` / `pip install 'httpx[http2]'` 这种写法。
+		// 捕获到的 httpx[http2] 原样交给 pip（exec 直接传参、不经 shell），登记时也按这个写法改名，见
+		// RecordAutoInstalledDepForPythonVersion。
 		if matches := autoInstallPyHintRe.FindStringSubmatch(output); len(matches) > 1 {
 			requested := strings.TrimSpace(matches[1])
 			if requested == "" || isPythonStdlib(requested) || thirdPartyExcludedModules[requested] {

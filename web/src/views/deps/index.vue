@@ -2136,8 +2136,14 @@ async function setCurrentPythonDefault() {
 
 function parseNames(text: string): string[] {
   if (!autoSplit.value) return [text.trim()].filter(Boolean);
+  // 方括号里的逗号 / 空白不切（issue #166）：httpx[http2,socks] 是一个包带两个 extras，
+  // 以前会被切成 httpx[http2 和 socks] 两个坏名字。
+  // 换行无论如何都先切开（与 APP 的 splitDependencyNames 同一口径）：用户漏写 ] 时，
+  // 不能把后面几行吞进同一个名字里提交上去。
+  // 行内的前瞻表示「往后先遇到 ] 而不是 [」，即当前分隔符落在一对方括号里面。
   return text
-    .split(/[\n,\s]+/)
+    .split(/\r?\n/)
+    .flatMap((line) => line.split(/[,\s]+(?![^[]*\])/))
     .map((s) => s.trim())
     .filter(Boolean);
 }

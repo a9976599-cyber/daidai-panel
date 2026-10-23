@@ -269,7 +269,32 @@ func (h *DepsHandler) Create(c *gin.Context) {
 
 		for _, pythonVersion := range dependencyPythonInstallVersions(req.Type) {
 			// 同名已安装 / 安装中 / 排队中的跳过、不重复安装。查重口径见 findExistingDependency。
-			if _, exists := findExistingDependency(req.Type, name, pythonVersion, dependencyActiveStatuses...); exists {
+			if existing, exists := findExistingDependency(req.Type, name, pythonVersion, dependencyActiveStatuses...); exists {
+				// issue #166：Python 查重会剥掉 extras，httpx[http2] 会命中已装的 httpx 而被「已存在跳过」，
+				// h2 永远装不上。命中的是已装好的记录、且它的写法没覆盖本次的 extras 时，不跳过：
+				// 把这条记录原地改名成本次写法、置为安装中、重新安装 —— 仍是一包一条，不新建记录。
+				// 命中安装中 / 排队中的照旧跳过：那边的安装还没结束，这时改名重装会和它抢同一条记录。
+				if req.Type == model.DepTypePython && existing.Status == model.DepStatusInstalled && !service.PythonExtrasCovered(existing.Name, name) {
+					// 新名字是「旧写法 + 本次 extras」合并的结果，不是整串换成本次写法：旧记录里的版本锁定
+					// （httpx==0.27.0）和已有 extras（httpx[socks]）在重建容器重装时还要用，整串替换会丢。
+					// 记录名和这次交给 pip 的写法用同一个，装的就是登记的。
+					// 用独立变量，不能覆盖循环里的 name：下一个 Python 版本还要拿用户原始写法去查重、合并。
+					upgradedName := service.MergePythonSpecExtras(existing.Name, name)
+					if err := database.DB.Model(&existing).Updates(map[string]interface{}{
+						"name":   upgradedName,
+						"status": model.DepStatusInstalling,
+						"log":    "",
+					}).Error; err != nil {
+						continue
+					}
+					existing.Name = upgradedName
+					existing.Status = model.DepStatusInstalling
+					existing.Log = ""
+					created = append(created, existing.ToDict())
+
+					go dependencyInstallRunner(existing.ID, req.Type, upgradedName)
+					continue
+				}
 				skipped++
 				continue
 			}
