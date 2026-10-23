@@ -4698,6 +4698,13 @@ columns = append(columns, "updated_at")
   ⚠️ 这个标记**刻意不进 `system_config_registry.go`**：那张表里每一条都是用户可见的设置项（带 label / 分组、会渲染到设置页），
   塞一个 `dependency_mirror_migrated` 进去会冒出一个没人看得懂的条目；而镜像源本身就是磁盘态，标记放数据目录语义更一致。
   数据目录还没就绪（启动早期）时宁可不搬——搬了却关不掉比不搬糟得多。
+- 🔴 **pip / npm 只有「留空」才回落默认加速源，官方源原样保存、原样生效**（v3.3.9 / #165）。
+  以前 `normalizePipMirrorForWrite` / `EffectiveNpmMirror` 把 pypi.org、pypi.python.org、registry.npmjs.org 和留空一样换成默认源，
+  用户选了官方源，存进 pip.conf / .npmrc 的却是腾讯云 / npmmirror——官方源这个选项永远选不上。`isOfficialPipMirror` / `isOfficialNpmMirror` 已删。
+  **Linux 源不同，`isOfficialLinuxMirror` 必须保留**：容器出厂的 sources.list 就是官方源，`EnsureDefaultLinuxMirror` 靠「官方源 = 出厂态」做启动替换；
+  照搬 pip 的口径，所有新容器都会停在 deb.debian.org。
+  测试：`TestEffectivePipMirrorFallsBackToDefaultAcceleratedMirror` / `TestEffectiveNpmMirrorFallsBackToDefaultAcceleratedMirror` 的 `official preserved`、
+  `TestSetPipMirrorKeepsOfficialMirror`（存盘、生效值、`PIP_INDEX_URL` 都是官方源）、`TestSetNpmMirrorKeepsOfficialMirror`。
 
 **启动收口 queued**：`ReconcileDependenciesAfterRestart`（`main.go` 的 `verifyInstalledDeps()`）把 `queued` 与 installing / removing 一起纳入：
 
@@ -5015,6 +5022,76 @@ if staleRound && strings.ContainsAny(dep.Name, "=><~![@;") {
     return dependencyInstalledFunc(dep.Type, dep.Name, dep.PythonVersion)
 }
 installed := snapshot[CanonicalizePythonPackageName(dep.Name)] // 基础包名 + PEP 503
+```
+
+---
+
+## 场景：Python 依赖的 extras 与原地升级（v3.3.9，#166）
+
+### 1. Scope / Trigger
+
+- 用户报：脚本提示 `pip install httpx[http2]`，自动安装只装了 `httpx`，h2 一直缺；去依赖管理手动装 `httpx[http2]` 又被「已存在跳过」。
+- 三处都栽在同一件事上：**查重键剥掉了 extras，但装包和登记必须带着 extras**。
+
+### 2. Signatures
+
+- `service.PythonExtrasCovered(existingSpec, requestedSpec string) bool`：旧写法的 extras 集合 ⊇ 新写法的（小写 + PEP 503 分隔符折叠；只看 `;` 之前第一对方括号，没闭合按「没有 extras」）。
+- `service.MergePythonSpecExtras(existingSpec, requestedSpec string) string`：只在 `PythonExtrasCovered == false` 时用。
+- `autoInstallPyHintRe`：`pip3?\s+install\s+["']?([a-zA-Z][a-zA-Z0-9_.@-]*(?:\[[a-zA-Z0-9_.,\s-]*\])?)`。
+
+### 3. Contracts
+
+- 查重键不变：`CanonicalizePythonPackageName`（剥 marker / extras / 版本后 PEP 503），**一包一条**，启动期 `MergeDuplicatePythonDependencies` 也不变。
+- `POST /deps`（`handler.Create`）命中同名记录时：
+  - 命中 **installed** 且 extras 没被覆盖 → **原地升级**：同一条记录改名为 `MergePythonSpecExtras(旧, 新)`、状态置 installing、清空日志、计入 `data`，`dependencyInstallRunner` 装的也是合并后的写法；
+  - 命中 installing / queued，或 extras 已覆盖 → 照旧 `skipped++`。
+- 合并规则：基础名取新写法；extras = 旧的（原顺序原拼写）+ 新写法里旧的没有的；extras 之后那段（`==0.27.0`、`>=1,<2`、`@ url`、`; marker`）新写法有就用新的，没有就沿用旧的。
+  **为什么合并**：记录名就是重建容器后自动重装的写法，整串换成新写法会丢掉旧的版本锁定和已有 extras。
+- 自动安装：提示正则连 extras 一起捕获；`RecordAutoInstalledDepForPythonVersion` 命中已有记录且 extras 没覆盖时，登记名同样改成合并写法（pip 实际执行的仍是候选写法）。
+- 新建依赖时切名字（网页 `parseNames`、APP `splitDependencyNames`）：**换行无条件切**，行内逗号 / 空白落在方括号里不切。
+
+### 4. Validation & Error Matrix
+
+| 已有记录 | 本次提交 | 结果 |
+|---|---|---|
+| `httpx`（installed） | `httpx[http2]` | 原地升级为 `httpx[http2]`，重装 |
+| `httpx==0.27.0`（installed） | `httpx[http2]` | 原地升级为 `httpx[http2]==0.27.0` |
+| `httpx[socks]`（installed） | `httpx[http2]` | 原地升级为 `httpx[socks,http2]` |
+| `httpx[http2]`（installed） | `httpx` / `httpx[HTTP_2]` | 跳过（已覆盖） |
+| `httpx`（installing / queued） | `httpx[http2]` | 跳过（不抢正在装的记录） |
+| `httpx`（failed） | `httpx[http2]` | 不命中（查重只认 installed / installing / queued），新建一条 |
+
+### 5. Good/Base/Bad Cases
+
+- Good：已装 `httpx==0.27.0`，脚本报缺 h2 → 自动安装 `httpx[http2]` → 登记名变 `httpx[http2]==0.27.0`，重建容器后重装仍带 h2、仍锁 0.27.0。
+- Base：`requests` 再提交 `Requests` → 照旧按 PEP 503 判重跳过。
+- Bad：为了让 extras 能装上，把 extras 加进查重键 —— 同一个包会出现两条记录，启动期合并又按基础名删掉其中一条，删哪条看更新时间。
+
+### 6. Tests Required
+
+- `service/python_package_name_test.go`：`TestPythonExtrasCovered`、`TestMergePythonSpecExtras`（上表的合并例子 + 方括号没闭合 + 空白）。
+- `service/dependency_auto_install_test.go`：`TestDetectAutoInstallCandidate` 的 `python hint keeps extras from httpx h2 error`（httpx 原文报错）、`python hint keeps quoted extras`。
+- `service`：`TestRecordAutoInstalledDepRenamesWhenExtrasNotCovered`（断言合并名 `httpx[http2]==0.27.0`）、`TestRecordAutoInstalledDepKeepsNameWhenExtrasCovered`。
+- `handler/deps_duplicate_skip_test.go`：`TestPythonDependencyCreateUpgradesInstalledRecordForNewExtras`（记录名与 runner 收到的都是合并名）、
+  `TestPythonDependencyCreateSkipsInstallingRecordEvenWithNewExtras`、`TestPythonDependencyCreateSkipsInstalledRecordWhenExtrasCovered`。
+
+### 7. Wrong vs Correct
+
+```go
+// Wrong：查重命中就跳过 —— httpx[http2] 永远装不上
+if _, exists := findExistingDependency(req.Type, name, pythonVersion, dependencyActiveStatuses...); exists {
+    skipped++
+    continue
+}
+
+// Wrong：原地升级但整串换名 —— httpx==0.27.0 的锁定在重建容器后丢失
+updates["name"] = name
+
+// Correct：只在 installed 且 extras 没覆盖时原地升级，名字用合并写法，循环里的 name 不覆盖（下一个 Python 版本还要用原始写法查重）
+if req.Type == model.DepTypePython && existing.Status == model.DepStatusInstalled && !service.PythonExtrasCovered(existing.Name, name) {
+    upgradedName := service.MergePythonSpecExtras(existing.Name, name)
+    // 更新 name / status=installing / log="" 后 go dependencyInstallRunner(existing.ID, req.Type, upgradedName)
+}
 ```
 
 ---
