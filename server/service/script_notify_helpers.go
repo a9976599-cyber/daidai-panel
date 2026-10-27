@@ -829,7 +829,9 @@ func RevokeScriptToken(info *ScriptTokenInfo) {
 	blockToken(info.JTI, "access", nil, info.ExpiresAt)
 }
 
-func BuildNotifyHelperEnv(scriptsDir string, workDir string, serverPort int, defaultChannelID *uint, ttl time.Duration) (map[string]string, *ScriptTokenInfo, error) {
+// notifyOnly 为 true 时（任务限定了可用环境变量，#168）签一枚只能发通知的令牌：
+// 内置 notify.py / sendNotify.js 只调发通知接口，不受影响；脚本拿它调其它接口一律 403。
+func BuildNotifyHelperEnv(scriptsDir string, workDir string, serverPort int, defaultChannelID *uint, ttl time.Duration, notifyOnly bool) (map[string]string, *ScriptTokenInfo, error) {
 	if ttl <= 0 {
 		ttl = 2 * time.Hour
 	}
@@ -846,7 +848,13 @@ func BuildNotifyHelperEnv(scriptsDir string, workDir string, serverPort int, def
 		return nil, nil, err
 	}
 
-	tokenInfo, err := middleware.GenerateTemporaryAccessTokenInfo(middleware.ScriptTokenUsername, "operator", ttl)
+	var tokenInfo *middleware.TokenInfo
+	var err error
+	if notifyOnly {
+		tokenInfo, err = middleware.GenerateNotifyOnlyAccessTokenInfo(middleware.ScriptTokenUsername, "operator", ttl)
+	} else {
+		tokenInfo, err = middleware.GenerateTemporaryAccessTokenInfo(middleware.ScriptTokenUsername, "operator", ttl)
+	}
 	if err != nil {
 		return nil, nil, err
 	}

@@ -163,7 +163,7 @@ stdout 只输出 MCP 协议消息，就绪提示与错误都写到 stderr。
 
 | 工具 | 说明 |
 |---|---|
-| `list_tasks` | 分页查询任务，可按关键词、运行状态、分组、标签筛选；`enabled` 是启用开关，`status_text` 是运行状态 |
+| `list_tasks` | 分页查询任务，可按关键词、运行状态、分组、标签筛选；`enabled` 是启用开关，`status_text` 是运行状态，`env_scope` 是可用环境变量范围（all / selected） |
 | `get_task` | 按 ID 查看任务完整配置 |
 | `get_task_log` | 任务最近一次执行的日志（过长只保留末尾） |
 | `list_task_labels` | 全部任务用过的自定义标签及各自的任务数，按名称升序；不含「分组:名称」与订阅这两类内部标签（分组用 `list_tasks` 的 `group` 筛选）；标签名可传给 `list_tasks` 的 `label` 筛选任务（模糊匹配） |
@@ -188,7 +188,7 @@ stdout 只输出 MCP 协议消息，就绪提示与错误都写到 stderr。
 | `set_task_enabled` | 启用或禁用任务 |
 | `batch_task_action` ⚠️ | 批量 enable / disable / run / stop / pin / unpin / delete（delete 不删脚本文件） |
 | `create_task` | 新建任务（名称、命令、定时规则、类型、超时、标签、重试、通知等），建好即启用 |
-| `update_task` ⚠️ | 按 ID 修改任务，只改传入的字段；脚本改名 / 移动后用它同步任务命令 |
+| `update_task` ⚠️ | 按 ID 修改任务，只改传入的字段；脚本改名 / 移动后用它同步任务命令；不改可用环境变量范围（只能在网页或 APP 里设置） |
 | `batch_set_task_notify` ⚠️ | 批量打开 / 关闭失败、成功、终止通知，只改传入的开关、不改通知渠道；`ids` 指定任务，或 `all: true` 改全部任务；已在排队的那一次执行仍用旧设置 |
 | `create_env` / `update_env` ⚠️ / `delete_env` ⚠️ | 新建、修改、删除环境变量 |
 | `batch_env_action` ⚠️ | 批量 enable / disable / delete 环境变量 |

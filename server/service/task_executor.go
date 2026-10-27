@@ -887,7 +887,9 @@ func (e *TaskExecutor) runTask(req *ExecutionRequest, taskLog *model.TaskLog, ti
 		// 吊销压根没机会执行」时兜底。取值不能太短，否则长任务会跑到一半丢掉 API 权限。
 		envTTL = UntimedTaskScriptTokenTTL
 	}
-	envVars, scriptToken, envErr := BuildManagedRuntimeEnvMapWithScriptToken(taskWorkDir, e.scriptsDir, task.NotificationChannelID, envTTL, task.PythonVersion)
+	// 任务级「可用环境变量」（#168）：「全部」时是 nil，与改动前一致；「指定」时只注入命中的变量，脚本令牌只能发通知。
+	envScope := TaskRuntimeEnvScope(task)
+	envVars, scriptToken, envErr := BuildManagedRuntimeEnvMapWithScriptToken(taskWorkDir, e.scriptsDir, task.NotificationChannelID, envTTL, task.PythonVersion, envScope)
 	if envErr != nil {
 		log.Printf("prepare task runtime env failed: %v", envErr)
 	}
@@ -1037,6 +1039,10 @@ func (e *TaskExecutor) runTask(req *ExecutionRequest, taskLog *model.TaskLog, ti
 	}
 
 	onOutput(fmt.Sprintf("=== 开始执行 [%s] ===\n", startTime.Format("2006-01-02 15:04:05")))
+	// 指定了可用环境变量时在日志开头说明注入了哪些（#168）：只写变量名、不写值；最多列 20 个，超出的只写总数。
+	if envScope != nil {
+		onOutput(formatTaskEnvScopeLogLine(envScope.InjectedNames))
+	}
 
 	// 前置 / 后置钩子起来后登记到这次执行上：面板关停（StopAllRunningTasks）时按进程组杀掉，手动停止照旧不碰它们。
 	// 钩子都是先后跑的，共用一个变量记住当前那个进程，跑完就注销。

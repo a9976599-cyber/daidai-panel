@@ -370,7 +370,8 @@ const scriptDebugEnvTTL = 2 * time.Hour
 // 否则这枚凭据会一直有效到 scriptDebugEnvTTL 到期。
 func buildScriptExecEnv(workDir string) (map[string]string, *service.ScriptTokenInfo) {
 	// 与原实现一致：构建部分失败时仍返回已拼好的 env（通知 helper 不可用而已，脚本照跑）。
-	envMap, scriptToken, _ := service.BuildManagedRuntimeEnvMapWithScriptToken(workDir, config.C.Data.ScriptsDir, nil, scriptDebugEnvTTL, "")
+	// 最后的 nil：调试运行与 run-code 不属于任何任务，注入全部已启用变量（#168 的任务级范围不适用）。
+	envMap, scriptToken, _ := service.BuildManagedRuntimeEnvMapWithScriptToken(workDir, config.C.Data.ScriptsDir, nil, scriptDebugEnvTTL, "", nil)
 	return envMap, scriptToken
 }
 

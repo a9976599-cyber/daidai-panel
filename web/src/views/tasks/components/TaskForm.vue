@@ -7,6 +7,7 @@ import TaskLabelPicker from './TaskLabelPicker.vue'
 import { mergeTaskLabels, normalizeTaskNameCounts, splitTaskLabels } from '../taskLabels'
 import { useResponsive } from '@/composables/useResponsive'
 import { taskApi, type TaskGroupSummary } from '@/api/task'
+import { envApi, type EnvNameOption } from '@/api/env'
 import type { PythonRuntimeInfo } from '@/api/deps'
 
 const props = withDefaults(defineProps<{
@@ -57,9 +58,16 @@ const form = ref({
   stop_schedule: '',
   notify_on_abort: false,
   group_name: '',
+  // 可用环境变量（#168）：all = 注入全部已启用变量（默认）；selected = 只注入命中下面分组 / 变量名的
+  env_scope: 'all' as 'all' | 'selected',
+  env_groups: [] as string[],
+  env_names: [] as string[],
 })
 
 const activeTab = ref('basic')
+// 「环境变量」页签的候选（#168）：每次打开弹窗各拉一次，失败静默、不挡保存（留着上一次的清单）
+const envGroupOptions = ref<string[]>([])
+const envNameOptions = ref<EnvNameOption[]>([])
 const internalLabels = ref<string[]>([])
 // 标签选择器（#157）：输入框里没回车的字由它在保存前并进 form.labels（commitPending）。
 // 输入状态放在它自己身上、随弹窗内容一起销毁；labelPickerKey 每次打开都换一个，兜住「关窗动画没走完又打开」时
@@ -160,6 +168,10 @@ watch(() => props.visible, (val) => {
       log_retention_days: hasCustomLogRetention ? taskLogRetention : null,
       stop_schedule: props.task.stop_schedule || '',
       notify_on_abort: props.task.notify_on_abort ?? false,
+      // 只有明确是 selected 才算「指定」；老面板没有这个字段时按「全部」回显
+      env_scope: props.task.env_scope === 'selected' ? 'selected' : 'all',
+      env_groups: Array.isArray(props.task.env_groups) ? [...props.task.env_groups] : [],
+      env_names: Array.isArray(props.task.env_names) ? [...props.task.env_names] : [],
     }
   } else if (val) {
     const p = props.prefill
@@ -176,12 +188,14 @@ watch(() => props.visible, (val) => {
       notify_on_failure: false, notify_on_success: false, notification_channel_id: null, labels: [], depends_on: null,
       task_before: '', task_after: '', allow_multiple_instances: false, group_name: '', stop_schedule: '', notify_on_abort: false,
       log_retention_days: null,
+      env_scope: 'all', env_groups: [], env_names: [],
     }
   }
   activeTab.value = 'basic'
   if (val) {
     labelPickerKey.value++
     void loadGroupOptions()
+    void loadEnvOptions()
   }
 })
 
@@ -190,6 +204,23 @@ async function loadGroupOptions() {
     groupOptions.value = normalizeTaskNameCounts(await taskApi.groups())
   } catch {
     // 静默：留着上一次的清单（见 groupOptions 的说明）
+  }
+}
+
+// 「环境变量」页签的分组与变量名候选（#168）。两个接口各自失败各自静默，互不影响，也不挡保存：
+// 已选中的值即便不在候选里，多选框也照样显示、照样提交。
+async function loadEnvOptions() {
+  try {
+    const res = await envApi.groups()
+    envGroupOptions.value = Array.isArray(res.data) ? res.data : []
+  } catch {
+    // 静默
+  }
+  try {
+    const res = await envApi.names()
+    envNameOptions.value = Array.isArray(res.data) ? res.data : []
+  } catch {
+    // 静默
   }
 }
 
@@ -293,6 +324,11 @@ function handleSubmit() {
     data.cron_expression = ''
   }
   data.labels = mergeTaskLabels(form.value.labels, internalLabels.value, form.value.group_name)
+  // 「全部」时不带切换前残留的选择（后端也会清空），请求体与所见一致
+  if (data.env_scope !== 'selected') {
+    data.env_groups = []
+    data.env_names = []
+  }
   if (!data.task_before) data.task_before = ''
   if (!data.task_after) data.task_after = ''
   emit('submit', data)
@@ -496,6 +532,60 @@ function handleSubmit() {
         </el-form>
       </el-tab-pane>
 
+      <!-- 任务级「可用环境变量」（#168）。说明文字要如实：只是减少暴露，不是沙箱 -->
+      <el-tab-pane label="环境变量" name="env">
+        <el-form :model="form" :label-width="dialogFullscreen ? 'auto' : '100px'" :label-position="dialogFullscreen ? 'top' : 'right'">
+          <el-form-item label="可用变量">
+            <el-radio-group v-model="form.env_scope">
+              <el-radio value="all">全部（默认）</el-radio>
+              <el-radio value="selected">指定</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <template v-if="form.env_scope === 'selected'">
+            <el-form-item label="分组">
+              <el-select
+                v-model="form.env_groups"
+                multiple
+                filterable
+                collapse-tags
+                collapse-tags-tooltip
+                clearable
+                placeholder="选择要注入的变量分组"
+                style="width: 100%"
+              >
+                <el-option v-for="g in envGroupOptions" :key="g" :label="g" :value="g" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="变量名">
+              <!-- 标签沿用变量页的「JD_COOKIE (3)」写法，括号里是全库同名条数 -->
+              <el-select
+                v-model="form.env_names"
+                multiple
+                filterable
+                collapse-tags
+                collapse-tags-tooltip
+                clearable
+                placeholder="选择要注入的变量名"
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="option in envNameOptions"
+                  :key="option.name"
+                  :label="`${option.name} (${option.count})`"
+                  :value="option.name"
+                />
+              </el-select>
+            </el-form-item>
+          </template>
+          <div class="hooks-help">
+            只注入命中任一分组或变量名的已启用变量；config.sh 和面板内置变量照常注入。指定后，脚本里的 DAIDAI_TOKEN 只能用来发通知。
+          </div>
+          <div class="hooks-help env-scope-warning">
+            这不是沙箱：脚本仍能用 ddp 命令或直接读取面板数据文件拿到全部变量。来路不明的脚本不要运行。
+          </div>
+        </el-form>
+      </el-tab-pane>
+
       <el-tab-pane label="前后置脚本" name="hooks">
         <el-form :model="form" :label-width="dialogFullscreen ? 'auto' : '100px'" :label-position="dialogFullscreen ? 'top' : 'right'">
           <div class="hooks-help">
@@ -664,6 +754,13 @@ function handleSubmit() {
 .hooks-help-list {
   margin: 6px 0 0;
   padding-left: 20px;
+}
+
+// 「这不是沙箱」那条警示（#168）：沿用说明区块的版式，换成警告色，免得被当成普通说明扫过去
+.env-scope-warning {
+  border-color: var(--el-color-warning-light-5);
+  background: var(--el-color-warning-light-9);
+  color: var(--el-color-warning-dark-2);
 }
 
 @media (max-width: 768px) {

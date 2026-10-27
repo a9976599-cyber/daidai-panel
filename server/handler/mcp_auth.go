@@ -83,6 +83,12 @@ func authenticateMCPBearer(c *gin.Context, tokenStr string) (string, bool) {
 		response.Unauthorized(c, "令牌已被撤销")
 		return "", false
 	}
+	// 只能发通知的脚本令牌（#168）在 MCP 这里直接拒绝：MCP 没有「只发通知」的用法，
+	// 放进来至少能列出工具清单。工具回放时 JWTAuth 也会再拦一次，两处都挡住。
+	if claims.NotifyOnly {
+		response.Forbidden(c, middleware.NotifyOnlyTokenForbiddenMessage)
+		return "", false
+	}
 
 	if strings.HasPrefix(claims.Username, "app:") || strings.HasPrefix(claims.Role, "app:") {
 		// 应用令牌固定 24 小时有效、没有 jti 没法单条吊销，禁用应用是唯一的止血手段。

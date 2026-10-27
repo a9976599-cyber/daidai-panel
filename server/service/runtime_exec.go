@@ -198,18 +198,84 @@ func BuildManagedRuntimeEnvMap(workDir, scriptsDir string, defaultChannelID *uin
 // 全部改用 BuildManagedRuntimeEnvMapWithScriptToken 并在用完后 RevokeScriptToken。
 // 保留这两个包装只是给不关心凭据回收的测试用；新增调用方前请先确认你真的不需要吊销。
 func BuildManagedRuntimeEnvMapForPythonVersion(workDir, scriptsDir string, defaultChannelID *uint, ttl time.Duration, pythonVersion string) (map[string]string, error) {
-	envMap, _, err := BuildManagedRuntimeEnvMapWithScriptToken(workDir, scriptsDir, defaultChannelID, ttl, pythonVersion)
+	envMap, _, err := BuildManagedRuntimeEnvMapWithScriptToken(workDir, scriptsDir, defaultChannelID, ttl, pythonVersion, nil)
 	return envMap, err
+}
+
+// RuntimeEnvScope 是任务级「可用环境变量」的范围（#168）。传 nil = 全部已启用变量（与改动前一致）。
+// 非 nil 时只注入「已启用，且变量名在 Names 里、或分组与 Groups 有交集」的变量；两个列表都空 = 一个用户变量都不注入。
+type RuntimeEnvScope struct {
+	Groups []string
+	Names  []string
+	// InjectedNames 由 BuildManagedRuntimeEnvMapWithScriptToken 回填：按范围实际注入的用户变量名（按注入顺序、已去重），
+	// 只给任务日志开头那一行用，不含值。
+	InjectedNames []string
+}
+
+// TaskRuntimeEnvScope 取任务的环境变量范围：只有「指定」才返回非 nil，「全部」与老数据都返回 nil。
+func TaskRuntimeEnvScope(task *model.Task) *RuntimeEnvScope {
+	if task == nil || task.GetEnvScope() != model.TaskEnvScopeSelected {
+		return nil
+	}
+	return &RuntimeEnvScope{Groups: task.GetEnvGroups(), Names: task.GetEnvNames()}
+}
+
+// taskEnvScopeLogMaxNames 是任务日志开头那一行最多列出的变量名个数，超出的只写个数。
+const taskEnvScopeLogMaxNames = 20
+
+// formatTaskEnvScopeLogLine 生成「指定」范围时写在任务日志开头的那一行（#168），只写变量名、不写值。
+func formatTaskEnvScopeLogLine(names []string) string {
+	if len(names) == 0 {
+		return "[环境变量] 已按任务设置只注入 0 个（没有命中任何已启用的变量）\n"
+	}
+	if len(names) <= taskEnvScopeLogMaxNames {
+		return fmt.Sprintf("[环境变量] 已按任务设置只注入 %d 个：%s\n", len(names), strings.Join(names, "、"))
+	}
+	return fmt.Sprintf("[环境变量] 已按任务设置只注入 %d 个：%s 等，另有 %d 个未列出\n",
+		len(names), strings.Join(names[:taskEnvScopeLogMaxNames], "、"), len(names)-taskEnvScopeLogMaxNames)
 }
 
 // BuildManagedRuntimeEnvMapWithScriptToken 额外返回注入凭据的 jti / 到期时间，
 // 让调用方能在任务结束时调 RevokeScriptToken 立刻作废它。
-func BuildManagedRuntimeEnvMapWithScriptToken(workDir, scriptsDir string, defaultChannelID *uint, ttl time.Duration, pythonVersion string) (map[string]string, *ScriptTokenInfo, error) {
+//
+// envScope 只有任务执行会传（#168）；ddp python/shell、脚本调试运行、run-code 都传 nil，行为不变。
+// 指定范围时只过滤用户变量：config.sh、青龙兼容变量、TZ、PATH、NO_PROXY、DAIDAI_* 照常注入；
+// 注入的脚本令牌改签只能发通知的那种。
+func BuildManagedRuntimeEnvMapWithScriptToken(workDir, scriptsDir string, defaultChannelID *uint, ttl time.Duration, pythonVersion string, envScope *RuntimeEnvScope) (map[string]string, *ScriptTokenInfo, error) {
 	var envVarRecords []model.EnvVar
 	// 按稳定顺序读取：置顶 > 组内位置 > 创建时间 > id；避免无 ORDER BY 导致同名变量的相对顺序抖动
 	database.DB.Where("enabled = ?", true).
 		Order("sort_order DESC, position ASC, created_at ASC, id ASC").
 		Find(&envVarRecords)
+
+	// 任务指定了范围：只留命中变量名或分组的记录，再走下面原有的按名合并（同名多条照样用 & 拼接）
+	if envScope != nil {
+		allowedNames := make(map[string]bool, len(envScope.Names))
+		for _, name := range envScope.Names {
+			allowedNames[name] = true
+		}
+		allowedGroups := make(map[string]bool, len(envScope.Groups))
+		for _, group := range envScope.Groups {
+			allowedGroups[group] = true
+		}
+		filtered := make([]model.EnvVar, 0, len(envVarRecords))
+		for _, ev := range envVarRecords {
+			matched := allowedNames[ev.Name]
+			if !matched {
+				// 一条变量可以属于多个分组（逗号拼接），任一分组命中就算
+				for _, group := range model.SplitEnvGroups(ev.Group) {
+					if allowedGroups[group] {
+						matched = true
+						break
+					}
+				}
+			}
+			if matched {
+				filtered = append(filtered, ev)
+			}
+		}
+		envVarRecords = filtered
+	}
 
 	// 先按 name 分组保持顺序，再用 joinTaskEnvValues 做带转义合并，
 	// 解决值内含 '&' 时脚本按 '&' 切分会错位的问题（与 splitTaskEnvValues 对称）。
@@ -220,6 +286,9 @@ func BuildManagedRuntimeEnvMapWithScriptToken(workDir, scriptsDir string, defaul
 			order = append(order, ev.Name)
 		}
 		grouped[ev.Name] = append(grouped[ev.Name], ev.Value)
+	}
+	if envScope != nil {
+		envScope.InjectedNames = append([]string{}, order...)
 	}
 
 	envMap := make(map[string]string, len(grouped))
@@ -308,7 +377,7 @@ func BuildManagedRuntimeEnvMapWithScriptToken(workDir, scriptsDir string, defaul
 	AppendScriptHelperPaths(envMap, scriptsDir)
 	var helperErr error
 	var scriptToken *ScriptTokenInfo
-	if helperEnv, tokenInfo, err := BuildNotifyHelperEnv(scriptsDir, workDir, config.C.Server.Port, defaultChannelID, ttl); err == nil {
+	if helperEnv, tokenInfo, err := BuildNotifyHelperEnv(scriptsDir, workDir, config.C.Server.Port, defaultChannelID, ttl, envScope != nil); err == nil {
 		for key, value := range helperEnv {
 			envMap[key] = value
 		}

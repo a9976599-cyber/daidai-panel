@@ -323,6 +323,10 @@ function buildTasks(now: number): DemoTask[] {
       task_after: null,
       allow_multiple_instances: false,
       stop_schedule: '',
+      // 与真实库里存量任务补列后的默认值一致：全部 / 空 / 空（#168）
+      env_scope: 'all' as const,
+      env_groups: [],
+      env_names: [],
       created_at: iso(createdAt),
       updated_at: iso(createdAt + 12 * HOUR_MS),
     }

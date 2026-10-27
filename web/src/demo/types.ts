@@ -87,6 +87,14 @@ export interface DemoTask {
   task_after: string | null
   allow_multiple_instances: boolean
   stop_schedule: string
+  /**
+   * 任务级「可用环境变量」（#168），口径照抄 server/model/task.go：
+   * 不是 'selected' 一律当 'all'，是 all 时两个列表为空；toTaskDict 原样下发（服务端 ToDict 也恒带这三个键）。
+   * 演示站不真跑脚本，这三项只用来让表单存了能读回、详情能显示。
+   */
+  env_scope: 'all' | 'selected'
+  env_groups: string[]
+  env_names: string[]
   created_at: string
   updated_at: string
 }

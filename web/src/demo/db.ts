@@ -404,6 +404,9 @@ export function toTaskDict(task: DemoTask): Record<string, unknown> {
   const item: Record<string, unknown> = {
     ...task,
     labels: [...task.labels],
+    // 可用环境变量（#168）：...task 已带上 env_scope，两个列表与 labels 一样拷一份再下发，免得页面改动响应时连带改了存储
+    env_groups: [...task.env_groups],
+    env_names: [...task.env_names],
     cron_expressions: splitCronExpressions(task.cron_expression),
     display_labels: preparedLabels.display,
     // 与后端 prepareTaskListItems 一致：订阅名再单独下发一份，前端靠它把订阅标签和自定义标签分开

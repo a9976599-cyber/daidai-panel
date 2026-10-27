@@ -126,8 +126,9 @@ func (t *toolset) listTasks(ctx context.Context, in listTasksInput) (any, error)
 	items := itemsOf(result)
 	slim := make([]map[string]any, 0, len(items))
 	for _, item := range items {
+		// env_scope 是可用环境变量范围（#168，all / selected）。列表只给这一个键保持精简，分组与变量名要看 get_task
 		out := pickFields(item, "id", "name", "command", "cron_expression", "task_type", "labels",
-			"is_pinned", "last_run_at", "last_running_time", "next_run_at", "schedule_hint")
+			"is_pinned", "last_run_at", "last_running_time", "next_run_at", "schedule_hint", "env_scope")
 		decorateTask(out, item)
 		slim = append(slim, out)
 	}

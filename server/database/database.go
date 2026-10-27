@@ -316,6 +316,11 @@ func EnsureColumns() {
 		// 还会因为时间更晚而顶掉「最近一次日志」，让用户看不到真正的执行输出。
 		{"last_skip_at", "DATETIME"},
 		{"last_skip_reason", "TEXT DEFAULT ''"},
+		// 任务级「可用环境变量」（#168）。写法照抄 subscriptions.overwrite_mode，与 model.Task 的 tag 逐字一致。
+		// 存量任务补列后一律落 all = 注入全部已启用变量，升级后每个任务的运行环境与升级前逐字节一致。
+		{"env_scope", "VARCHAR(16) NOT NULL DEFAULT 'all'"},
+		{"env_groups", "TEXT DEFAULT ''"},
+		{"env_names", "TEXT DEFAULT ''"},
 	})
 	migrateLegacyTaskPIDColumn()
 

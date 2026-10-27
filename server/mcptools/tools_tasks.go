@@ -19,7 +19,8 @@ func (t *toolset) registerTaskWriteTools(s *mcp.Server) {
 			"注意 command 会以面板的权限执行，新建后可用 run_task 立即运行一次。",
 		writeHints{}, t.createTask)
 	addWriteTool(s, "update_task", "修改任务",
-		"按 ID 修改任务配置，只改传入的字段（名称、命令、定时规则、类型、超时、标签等），原值被覆盖。脚本改名或移动后，可以用它同步任务的 command。",
+		"按 ID 修改任务配置，只改传入的字段（名称、命令、定时规则、类型、超时、标签等），原值被覆盖。脚本改名或移动后，可以用它同步任务的 command。"+
+			"不改可用环境变量范围（只能在网页或 APP 里设置）。",
 		writeHints{destructive: true, idempotent: true}, t.updateTask)
 	// 会覆盖已有的开关设置，按 quality-guidelines「会覆盖已有数据的也算破坏性」标 destructive。
 	addWriteTool(s, "batch_set_task_notify", "批量设置任务通知",
@@ -30,6 +31,8 @@ func (t *toolset) registerTaskWriteTools(s *mcp.Server) {
 
 // taskFields 是新建与修改共用的可选字段。指针为 nil、切片为 nil 表示没传：
 // 修改时只发送传了的字段，面板按「传了才改」处理；labels 传空数组表示清空标签。
+// 🔴 刻意不开放 env_scope / env_groups / env_names（#168 可用环境变量范围）：与环境变量的「重要」标记同一先例，
+// 这类保护性设置不让 AI 改，只能在网页或 APP 里设。不带这三项时面板保持原值。
 type taskFields struct {
 	TaskType               *string  `json:"task_type,omitempty" jsonschema:"任务类型：cron（按定时规则运行，默认）、manual（只手动运行）、startup（面板启动时运行）"`
 	CronExpression         *string  `json:"cron_expression,omitempty" jsonschema:"定时规则（5 段 cron，或带秒的 6 段；多条规则用换行分隔）。task_type 为 cron 时必填"`

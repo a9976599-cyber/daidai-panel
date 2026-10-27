@@ -82,29 +82,74 @@ func normalizeTaskLogRetentionDaysValue(value interface{}) (*int, error) {
 	}
 }
 
+// normalizeTaskEnvListValue 把 env_groups / env_names 的入参统一成去空、去重的字符串切片（#168）。
+// 网页、APP 发字符串数组；开放 API 手写时也兼容逗号拼接的字符串；null 当空列表。
+// Create 解出来的是 interface{}，Update、导入走 JSON map，三条路共用这一个函数。
+func normalizeTaskEnvListValue(value interface{}, field string) ([]string, error) {
+	raw := []string{}
+	switch typed := value.(type) {
+	case nil:
+	case string:
+		raw = append(raw, typed)
+	case []interface{}:
+		for _, item := range typed {
+			text, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s 只能是字符串数组", field)
+			}
+			raw = append(raw, text)
+		}
+	default:
+		return nil, fmt.Errorf("%s 只能是字符串数组", field)
+	}
+	// JoinEnvGroups 按逗号等分隔符拆开、去首尾空白、去空、去重，分组与变量名共用同一套规整
+	return model.SplitEnvGroups(model.JoinEnvGroups(raw)), nil
+}
+
+// resolveTaskEnvScope 校验并算出要落库的三列（#168）：env_scope 只收 all / selected；
+// 变量名必须符合 envNamePattern，不符合时点名是哪个；最终是 all 时两列清空，不留下看不见的旧选择。
+func resolveTaskEnvScope(scope string, groups, names []string) (string, string, string, error) {
+	for _, name := range names {
+		if !envNamePattern.MatchString(name) {
+			return "", "", "", fmt.Errorf("变量名 '%s' 格式无效：只能包含字母、数字和下划线，且不能以数字开头", name)
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case model.TaskEnvScopeAll:
+		return model.TaskEnvScopeAll, "", "", nil
+	case model.TaskEnvScopeSelected:
+		return model.TaskEnvScopeSelected, model.JoinEnvGroups(groups), strings.Join(names, ","), nil
+	default:
+		return "", "", "", fmt.Errorf("env_scope 只能是 all 或 selected")
+	}
+}
+
 func (h *TaskHandler) Create(c *gin.Context) {
 	var req struct {
-		Name                   string   `json:"name" binding:"required"`
-		Command                string   `json:"command" binding:"required"`
-		PythonVersion          string   `json:"python_version"`
-		CronExpression         string   `json:"cron_expression"`
-		TaskType               string   `json:"task_type"`
-		Timeout                *int     `json:"timeout"`
-		SuccessExitCodes       *string  `json:"success_exit_codes"`
-		RandomDelaySeconds     *int     `json:"random_delay_seconds"`
-		LogRetentionDays       *int     `json:"log_retention_days"`
-		MaxRetries             *int     `json:"max_retries"`
-		RetryInterval          *int     `json:"retry_interval"`
-		NotifyOnFailure        *bool    `json:"notify_on_failure"`
-		NotifyOnSuccess        *bool    `json:"notify_on_success"`
-		NotifyOnAbort          *bool    `json:"notify_on_abort"`
-		NotificationChannelID  *uint    `json:"notification_channel_id"`
-		Labels                 []string `json:"labels"`
-		DependsOn              *uint    `json:"depends_on"`
-		TaskBefore             *string  `json:"task_before"`
-		TaskAfter              *string  `json:"task_after"`
-		AllowMultipleInstances *bool    `json:"allow_multiple_instances"`
-		StopSchedule           *string  `json:"stop_schedule"`
+		Name                   string      `json:"name" binding:"required"`
+		Command                string      `json:"command" binding:"required"`
+		PythonVersion          string      `json:"python_version"`
+		CronExpression         string      `json:"cron_expression"`
+		TaskType               string      `json:"task_type"`
+		Timeout                *int        `json:"timeout"`
+		SuccessExitCodes       *string     `json:"success_exit_codes"`
+		RandomDelaySeconds     *int        `json:"random_delay_seconds"`
+		LogRetentionDays       *int        `json:"log_retention_days"`
+		MaxRetries             *int        `json:"max_retries"`
+		RetryInterval          *int        `json:"retry_interval"`
+		NotifyOnFailure        *bool       `json:"notify_on_failure"`
+		NotifyOnSuccess        *bool       `json:"notify_on_success"`
+		NotifyOnAbort          *bool       `json:"notify_on_abort"`
+		NotificationChannelID  *uint       `json:"notification_channel_id"`
+		Labels                 []string    `json:"labels"`
+		DependsOn              *uint       `json:"depends_on"`
+		TaskBefore             *string     `json:"task_before"`
+		TaskAfter              *string     `json:"task_after"`
+		AllowMultipleInstances *bool       `json:"allow_multiple_instances"`
+		StopSchedule           *string     `json:"stop_schedule"`
+		EnvScope               *string     `json:"env_scope"`
+		EnvGroups              interface{} `json:"env_groups"` // 字符串数组，也兼容逗号字符串，见 normalizeTaskEnvListValue
+		EnvNames               interface{} `json:"env_names"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "请求参数错误")
@@ -146,6 +191,31 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		SuccessExitCodes: model.DefaultSuccessExitCodes,
 		RetryInterval:    60,
 		NotifyOnFailure:  false,
+		EnvScope:         model.TaskEnvScopeAll,
+	}
+
+	// 任务级「可用环境变量」（#168）：三项都不带时（旧网页缓存、旧版 APP、开放 API）按默认「全部」。
+	// 只带了分组 / 变量名而没带 env_scope 时也按 all 算，两列随之清空——不能凭列表猜用户想「指定」。
+	if req.EnvScope != nil || req.EnvGroups != nil || req.EnvNames != nil {
+		scope := model.TaskEnvScopeAll
+		if req.EnvScope != nil {
+			scope = *req.EnvScope
+		}
+		envGroups, err := normalizeTaskEnvListValue(req.EnvGroups, "env_groups")
+		if err != nil {
+			response.BadRequest(c, err.Error())
+			return
+		}
+		envNames, err := normalizeTaskEnvListValue(req.EnvNames, "env_names")
+		if err != nil {
+			response.BadRequest(c, err.Error())
+			return
+		}
+		task.EnvScope, task.EnvGroups, task.EnvNames, err = resolveTaskEnvScope(scope, envGroups, envNames)
+		if err != nil {
+			response.BadRequest(c, err.Error())
+			return
+		}
 	}
 
 	if req.Timeout != nil {
@@ -401,6 +471,50 @@ func (h *TaskHandler) Update(c *gin.Context) {
 		}
 	}
 
+	// 任务级「可用环境变量」（#168）。这三项刻意不进上面的 allowedFields 白名单原样写：
+	// Update 是局部更新，三项任一出现时，按「库里旧值 + 本次请求」算出最终值再三项一起写（改回 all 时两列一并清空）；
+	// 一项都不带（旧网页缓存、旧版 APP、开放 API）时三列都不碰，保持原值。
+	_, hasEnvScope := req["env_scope"]
+	_, hasEnvGroups := req["env_groups"]
+	_, hasEnvNames := req["env_names"]
+	if hasEnvScope || hasEnvGroups || hasEnvNames {
+		scope := task.GetEnvScope()
+		if hasEnvScope {
+			value, ok := req["env_scope"].(string)
+			if !ok {
+				response.BadRequest(c, "env_scope 只能是 all 或 selected")
+				return
+			}
+			scope = value
+		}
+		envGroups := task.GetEnvGroups()
+		if hasEnvGroups {
+			normalized, err := normalizeTaskEnvListValue(req["env_groups"], "env_groups")
+			if err != nil {
+				response.BadRequest(c, err.Error())
+				return
+			}
+			envGroups = normalized
+		}
+		envNames := task.GetEnvNames()
+		if hasEnvNames {
+			normalized, err := normalizeTaskEnvListValue(req["env_names"], "env_names")
+			if err != nil {
+				response.BadRequest(c, err.Error())
+				return
+			}
+			envNames = normalized
+		}
+		finalScope, finalGroups, finalNames, err := resolveTaskEnvScope(scope, envGroups, envNames)
+		if err != nil {
+			response.BadRequest(c, err.Error())
+			return
+		}
+		updates["env_scope"] = finalScope
+		updates["env_groups"] = finalGroups
+		updates["env_names"] = finalNames
+	}
+
 	// 写库与回读放在同一个事务里，任何一步失败都回 500「更新任务失败」、库里保持原样，调度也不去动（#157）：
 	//   - 写库失败：以前这里不接 .Error，没写进去也照样回 200「task updated」，前端弹「任务更新成功」、
 	//     刷新后什么都没变，和「填了标签却没保存」的症状一模一样，很难排查；
@@ -513,6 +627,10 @@ func (h *TaskHandler) Copy(c *gin.Context) {
 		TaskAfter:              task.TaskAfter,
 		AllowMultipleInstances: task.AllowMultipleInstances,
 		StopSchedule:           task.StopSchedule,
+		// 可用环境变量（#168）跟着复制：副本是同一个脚本，限定范围不能在复制时悄悄放宽成「全部」
+		EnvScope:  task.GetEnvScope(),
+		EnvGroups: task.EnvGroups,
+		EnvNames:  task.EnvNames,
 	}
 	// 原来这行没接 .Error：插入失败也照样返回 201 + 一个没有 id 的空壳，用户以为复制成功了。
 	// 注意 tasks 表刻意不加名称唯一键（同名任务合法，这里本来就是产出「XX (副本)」），

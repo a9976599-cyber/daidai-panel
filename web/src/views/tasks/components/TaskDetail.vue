@@ -67,6 +67,18 @@ const cronExpressions = computed(() => {
     .filter(Boolean)
 })
 
+// 可用环境变量（#168）：「全部」或「指定（分组：a、b；变量：X、Y）」。老面板不下发 env_scope 时按全部显示
+const envScopeText = computed(() => {
+  if (props.task?.env_scope !== 'selected') return '全部'
+  const groups: string[] = Array.isArray(props.task?.env_groups) ? props.task.env_groups : []
+  const names: string[] = Array.isArray(props.task?.env_names) ? props.task.env_names : []
+  const parts: string[] = []
+  if (groups.length > 0) parts.push(`分组：${groups.join('、')}`)
+  if (names.length > 0) parts.push(`变量：${names.join('、')}`)
+  // 两个列表都空 = 一个用户变量都不注入，要直说
+  return parts.length > 0 ? `指定（${parts.join('；')}）` : '指定（未选任何分组或变量，不注入用户变量）'
+})
+
 function handleClose() {
   emit('update:visible', false)
 }
@@ -159,6 +171,9 @@ function handleClose() {
         </span>
         <!-- 未绑定渠道 = 走广播。广播只命中「默认推送」渠道，「绑定推送」渠道收不到。 -->
         <span v-else style="color: var(--el-text-color-placeholder)">全部默认推送渠道</span>
+      </el-descriptions-item>
+      <el-descriptions-item label="环境变量" :span="2">
+        <span style="word-break: break-all">{{ envScopeText }}</span>
       </el-descriptions-item>
       <el-descriptions-item label="下次运行时间" :span="2">
         <div class="next-run-row">

@@ -28,7 +28,7 @@ func TestBuildNotifyHelperEnvCreatesManagedHelpers(t *testing.T) {
 	scriptsDir := config.C.Data.ScriptsDir
 	workDir := filepath.Join(scriptsDir, "nested")
 
-	env, tokenInfo, err := BuildNotifyHelperEnv(scriptsDir, workDir, config.C.Server.Port, nil, time.Hour)
+	env, tokenInfo, err := BuildNotifyHelperEnv(scriptsDir, workDir, config.C.Server.Port, nil, time.Hour, false)
 	if err != nil {
 		t.Fatalf("build notify helper env: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestBuildNotifyHelperEnvUsesAbsoluteHelperPaths(t *testing.T) {
 		t.Fatalf("mkdir work dir: %v", err)
 	}
 
-	env, _, err := BuildNotifyHelperEnv(scriptsDir, workDir, config.C.Server.Port, nil, time.Hour)
+	env, _, err := BuildNotifyHelperEnv(scriptsDir, workDir, config.C.Server.Port, nil, time.Hour, false)
 	if err != nil {
 		t.Fatalf("build notify helper env: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestBuildNotifyHelperEnvExposesGenericAPIEntrypoint(t *testing.T) {
 	testutil.SetupTestEnv(t)
 
 	scriptsDir := config.C.Data.ScriptsDir
-	env, tokenInfo, err := BuildNotifyHelperEnv(scriptsDir, scriptsDir, config.C.Server.Port, nil, time.Hour)
+	env, tokenInfo, err := BuildNotifyHelperEnv(scriptsDir, scriptsDir, config.C.Server.Port, nil, time.Hour, false)
 	if err != nil {
 		t.Fatalf("build notify helper env: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestManagedRuntimeEnvMapCarriesScriptAPIEntrypoint(t *testing.T) {
 	testutil.SetupTestEnv(t)
 
 	scriptsDir := config.C.Data.ScriptsDir
-	envMap, tokenInfo, err := BuildManagedRuntimeEnvMapWithScriptToken(scriptsDir, scriptsDir, nil, time.Hour, "")
+	envMap, tokenInfo, err := BuildManagedRuntimeEnvMapWithScriptToken(scriptsDir, scriptsDir, nil, time.Hour, "", nil)
 	if err != nil {
 		t.Fatalf("build managed runtime env map: %v", err)
 	}

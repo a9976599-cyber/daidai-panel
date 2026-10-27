@@ -23,6 +23,11 @@ const (
 	RunAborted = 2
 
 	DefaultSuccessExitCodes = "0"
+
+	// 任务级「可用环境变量」范围（#168）：all = 注入全部已启用变量（默认，与升级前一致），
+	// selected = 只注入命中 EnvGroups / EnvNames 的已启用变量，且脚本令牌只能用来发通知。
+	TaskEnvScopeAll      = "all"
+	TaskEnvScopeSelected = "selected"
 )
 
 type Task struct {
@@ -77,8 +82,15 @@ type Task struct {
 	TaskAfter              *string    `gorm:"type:text" json:"task_after"`
 	AllowMultipleInstances bool       `json:"allow_multiple_instances"`
 	StopSchedule           string     `gorm:"type:text;default:''" json:"stop_schedule"`
-	CreatedAt              time.Time  `json:"created_at"`
-	UpdatedAt              time.Time  `json:"updated_at"`
+	// 任务级「可用环境变量」（#168）。tag 与 database.go 补列 SQL 逐字一致（见 database-guidelines.md），
+	// 否则每次 AutoMigrate 都整表重建 tasks。json 刻意保留字符串形态：备份清单直接序列化 model.Task，
+	// 这样原样带上、恢复原样读回；老备份没有这三个键 → 落库默认 all，恢复成「全部」。
+	// EnvGroups / EnvNames 都是逗号拼接：分组用 JoinEnvGroups 规范化，变量名受 envNamePattern 约束不含逗号。
+	EnvScope  string    `gorm:"size:16;not null;default:'all'" json:"env_scope"`
+	EnvGroups string    `gorm:"type:text;default:''" json:"env_groups"`
+	EnvNames  string    `gorm:"type:text;default:''" json:"env_names"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func (Task) TableName() string {
@@ -127,6 +139,9 @@ func (t *Task) ToDict() map[string]interface{} {
 		"task_after":               t.TaskAfter,
 		"allow_multiple_instances": t.AllowMultipleInstances,
 		"stop_schedule":            t.StopSchedule,
+		"env_scope":                t.GetEnvScope(),
+		"env_groups":               t.GetEnvGroups(),
+		"env_names":                t.GetEnvNames(),
 		"created_at":               t.CreatedAt,
 		"updated_at":               t.UpdatedAt,
 	}
@@ -234,4 +249,29 @@ func (t *Task) GetLabels() []string {
 		return []string{}
 	}
 	return strings.Split(t.Labels, ",")
+}
+
+// GetEnvScope 把库里的取值规范成 all / selected 两态（#168）：
+// 只有明确是 selected 才算「指定」，空串、老数据、手工改坏的值一律当 all，注入行为与升级前一致。
+func (t *Task) GetEnvScope() string {
+	if t != nil && strings.TrimSpace(t.EnvScope) == TaskEnvScopeSelected {
+		return TaskEnvScopeSelected
+	}
+	return TaskEnvScopeAll
+}
+
+// GetEnvGroups / GetEnvNames 把逗号拼接的列拆成数组，永远不返回 nil（ToDict 输出 [] 而不是 null）。
+func (t *Task) GetEnvGroups() []string {
+	if t == nil {
+		return []string{}
+	}
+	return SplitEnvGroups(t.EnvGroups)
+}
+
+func (t *Task) GetEnvNames() []string {
+	if t == nil {
+		return []string{}
+	}
+	// 变量名不含逗号，复用分组的拆分（去空、去重、去首尾空白）即可
+	return SplitEnvGroups(t.EnvNames)
 }

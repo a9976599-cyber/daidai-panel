@@ -52,6 +52,11 @@ func (h *TaskHandler) Export(c *gin.Context) {
 			"task_before":               task.TaskBefore,
 			"task_after":                task.TaskAfter,
 			"allow_multiple_instances":  task.AllowMultipleInstances,
+			// 可用环境变量（#168）。与 ToDict 同形：scope 规范成 all / selected，两个列表恒为数组。
+			// 旧版面板导入时认不出这三个键，会静默忽略、按全部处理。
+			"env_scope":  task.GetEnvScope(),
+			"env_groups": task.GetEnvGroups(),
+			"env_names":  task.GetEnvNames(),
 		}
 	}
 	response.Success(c, gin.H{"data": data})
@@ -150,6 +155,39 @@ func (h *TaskHandler) Import(c *gin.Context) {
 			SuccessExitCodes: model.DefaultSuccessExitCodes,
 			RetryInterval:    60,
 			NotifyOnFailure:  true,
+			EnvScope:         model.TaskEnvScopeAll,
+		}
+
+		// 可用环境变量（#168）：老导出文件没有这三个键 → 按默认「全部」；
+		// 带了就与创建接口同一套校验，不合法的这一条记进 errors 并跳过，其余任务照常导入。
+		_, hasEnvScope := taskData["env_scope"]
+		_, hasEnvGroups := taskData["env_groups"]
+		_, hasEnvNames := taskData["env_names"]
+		if hasEnvScope || hasEnvGroups || hasEnvNames {
+			scope := model.TaskEnvScopeAll
+			if hasEnvScope {
+				value, ok := taskData["env_scope"].(string)
+				if !ok {
+					errors = append(errors, fmt.Sprintf("任务 %d: env_scope 只能是 all 或 selected", i+1))
+					continue
+				}
+				scope = value
+			}
+			envGroups, err := normalizeTaskEnvListValue(taskData["env_groups"], "env_groups")
+			if err != nil {
+				errors = append(errors, fmt.Sprintf("任务 %d: %s", i+1, err.Error()))
+				continue
+			}
+			envNames, err := normalizeTaskEnvListValue(taskData["env_names"], "env_names")
+			if err != nil {
+				errors = append(errors, fmt.Sprintf("任务 %d: %s", i+1, err.Error()))
+				continue
+			}
+			task.EnvScope, task.EnvGroups, task.EnvNames, err = resolveTaskEnvScope(scope, envGroups, envNames)
+			if err != nil {
+				errors = append(errors, fmt.Sprintf("任务 %d: %s", i+1, err.Error()))
+				continue
+			}
 		}
 
 		if statusValue, exists := taskData["status"]; exists {

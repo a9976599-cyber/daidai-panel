@@ -938,7 +938,28 @@ const TASK_WRITABLE_KEYS = [
   'success_exit_codes', 'random_delay_seconds', 'max_retries', 'retry_interval',
   'notify_on_failure', 'notify_on_success', 'notify_on_abort', 'notification_channel_id',
   'depends_on', 'task_before', 'task_after', 'allow_multiple_instances', 'stop_schedule',
+  // 可用环境变量（#168）。写入后统一经 normalizeDemoTaskEnvScope 规整，口径同服务端
+  'env_scope', 'env_groups', 'env_names',
 ] as const
+
+/**
+ * 可用环境变量三项按服务端同口径规整（#168，handler/task_mutate.go 的 resolveTaskEnvScope）：
+ * 列表去空、去重（也兼容逗号字符串）；env_scope 不是 'selected' 一律当 'all'，是 all 时两个列表清空。
+ * 局部更新时没带的键在 applyTaskPayload 里已经跳过，这里拿到的就是「库里旧值 + 本次请求」。
+ */
+function normalizeDemoTaskEnvScope(task: DemoTask) {
+  const toList = (value: unknown): string[] => {
+    const raw = Array.isArray(value) ? value.map((item) => String(item)) : typeof value === 'string' ? value.split(',') : []
+    return [...new Set(raw.map((item) => item.trim()).filter(Boolean))]
+  }
+  task.env_groups = toList(task.env_groups)
+  task.env_names = toList(task.env_names)
+  if (task.env_scope !== 'selected') {
+    task.env_scope = 'all'
+    task.env_groups = []
+    task.env_names = []
+  }
+}
 
 function applyTaskPayload(task: DemoTask, body: Record<string, any>) {
   for (const key of TASK_WRITABLE_KEYS) {
@@ -947,6 +968,7 @@ function applyTaskPayload(task: DemoTask, body: Record<string, any>) {
     // id / status / created_at 直接覆盖掉运行态，属于「客户端说什么就是什么」
     ;(task as unknown as Record<string, unknown>)[key] = body[key]
   }
+  normalizeDemoTaskEnvScope(task)
   if (Array.isArray(body['labels'])) {
     task.labels = body['labels'].map((label: unknown) => String(label))
   }
@@ -993,9 +1015,15 @@ function createTask(body: Record<string, any>): DemoTask {
     task_after: body['task_after'] ?? null,
     allow_multiple_instances: Boolean(body['allow_multiple_instances']),
     stop_schedule: String(body['stop_schedule'] ?? ''),
+    // 新建默认「全部」；带了就按服务端口径规整（见下面的 normalizeDemoTaskEnvScope）。
+    // 复制任务走的也是这里（请求体是原任务展开），三项随之带到副本上，与服务端 Copy 一致
+    env_scope: body['env_scope'] === 'selected' ? 'selected' : 'all',
+    env_groups: body['env_groups'] ?? [],
+    env_names: body['env_names'] ?? [],
     created_at: now,
     updated_at: now,
   }
+  normalizeDemoTaskEnvScope(task)
   db().tasks.push(task)
   return task
 }
