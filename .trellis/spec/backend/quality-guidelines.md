@@ -6263,3 +6263,86 @@ _ = database.DB.Transaction(func(tx *gorm.DB) error {
 - `GET /subscriptions` 每项只在「启用 + 定时非空 + 整串能被 `ParseSchedule` 解析」时带 `next_pull_at`，其余不带这个键，前端显示 `-`。
 - 用 `panelcron.NextRunTimes(schedule, 1)`，**不要换成 `NextRunTimesForExpressions`**：后者按行拆分，而订阅调度器 `AddOrUpdateJob` 把整串交给 `ParseSchedule`、不拆行，多行规则在调度器里注册失败、根本不会触发；拆行就会显示一个永远不会到的时间。任务的 `next_run_at` 用拆行版本，是因为任务本身支持多条定时规则。
 - 演示站 `web/src/demo/adapter.ts` 的 `GET /subscriptions` 同口径现算，规则含换行就不给。
+
+## 场景：任务级可用环境变量与只能发通知的脚本令牌（v3.4.0，#168）
+
+### 1. 范围与触发
+
+- 改 `model.Task` 的 `EnvScope` / `EnvGroups` / `EnvNames`、`handler/task_mutate.go`（Create / Update / Copy）、`handler/task_import_export.go`、
+  `service/runtime_exec.go` 的 `BuildManagedRuntimeEnvMapWithScriptToken`、`middleware/auth.go` 的 `Claims` / `JWTAuth`、`handler/mcp_auth.go`，
+  或**新增任何「执行任务」「解析令牌」的入口**时必须看本节。
+- 这是「减少不必要的暴露」，**不是沙箱**：脚本与面板以同一系统用户运行（Docker 里是 root），仍能用 `ddp env list`、`ddp shell` 或直接读 `daidai.db` 拿到全部变量。
+  界面、`docs/script-api.md`、发布说明、issue 回复都要如实写这一句。
+
+### 2. 签名
+
+- 列（tag 与 `EnsureColumns` 补列 SQL 逐字一致，见 `database-guidelines.md` 契约 S3）：`env_scope VARCHAR(16) NOT NULL DEFAULT 'all'`、`env_groups TEXT DEFAULT ''`、`env_names TEXT DEFAULT ''`（都是逗号拼接）。
+- `model.Task.GetEnvScope()`：不是 `selected` 一律 `all`；`GetEnvGroups()` / `GetEnvNames()` 永远非 nil。
+- `service.TaskRuntimeEnvScope(task) *RuntimeEnvScope`：只有 selected 返回非 nil。
+- `BuildManagedRuntimeEnvMapWithScriptToken(workDir, scriptsDir, channelID, ttl, pythonVersion, envScope *RuntimeEnvScope)`：唯一传非 nil 的是 `task_executor.go` 的任务执行；
+  `ddp python/shell`、脚本调试运行、run-code 传 nil（它们不属于任何任务）。
+- `BuildNotifyHelperEnv(..., notifyOnly bool)` → `middleware.GenerateNotifyOnlyAccessTokenInfo`；``Claims.NotifyOnly bool `json:"notify_only,omitempty"` ``。
+- 放行表 `middleware.notifyOnlyAllowedPaths`：`POST /api/v1/notifications/send` 与 `POST /api/notifications/send`（按 `c.FullPath()` 判）；403 文案常量 `middleware.NotifyOnlyTokenForbiddenMessage`。
+
+### 3. 契约
+
+- `ToDict` 与任务导出：`env_scope` 恒为 `all` 或 `selected`，`env_groups` / `env_names` 恒为数组。APP（v1.4.4 起）靠「`env_scope` 是字符串」判断面板支不支持，这个键不能省。
+- 入参：数组或逗号字符串都收，去空去重；最终 scope 是 all 时两列清空，不留看不见的旧选择。
+- Update 是局部更新：三项都不带就三列不碰（旧网页缓存、旧版 APP、开放 API、MCP 的 `update_task` 都不带）；任一出现时按「库里旧值 + 本次请求」算出最终值，三项一起写。
+- 注入：selected 时只留「已启用，且变量名命中或分组有交集」的记录，再走原有的按名合并；两个列表都空 = 不注入任何用户变量。
+  config.sh、青龙兼容变量、TZ、PATH、NO_PROXY、DAIDAI_* 照常注入；前后置脚本与全局 task_before.sh / task_after.sh / extra.sh 共用这一份变量。
+- 任务日志：selected 时在「=== 开始执行 ===」之后写 `[环境变量] 已按任务设置只注入 N 个：…`（只写名字不写值，最多列 20 个）。
+- 令牌：selected 时注入的 `DAIDAI_TOKEN` 是 notify-only。JWTAuth 在**撤销判定之后**拦（已吊销的照旧 401），MCP 的 `authenticateMCPBearer` 直接 403；
+  MCP 工具回放也过 JWTAuth，两处都挡。内置 notify.py / sendNotify.js 只调发通知接口，不受影响。
+- 备份直接序列化 `model.Task`，三列以字符串原样带上；老备份没有这三个键 → 恢复成 all。订阅自动建任务、青龙导入不设这三项，由 tag 默认值落成 all。
+- MCP：`get_task` 原样带三项、`list_tasks` 带 `env_scope`；`create_task` / `update_task` 不开放（AI 不能改这类保护性设置，同契约 E1「重要」标记的先例）。
+
+### 4. 校验与错误矩阵
+
+| 情形 | 结果 |
+|---|---|
+| `env_scope` 是字符串但不是 all / selected | 400「env_scope 只能是 all 或 selected」，不写库 |
+| Update 里 `env_scope` 不是字符串（含 null） | 同上 400；Create 里 null 视同没带，非字符串由绑定拦成 400「请求参数错误」 |
+| `env_names` 里有不符合 `^[A-Za-z_][A-Za-z0-9_]*$` 的名字 | 400，点名是哪个 |
+| `env_groups` / `env_names` 的元素不是字符串，或整体是对象 | 400「… 只能是字符串数组」 |
+| Create 只带列表、没带 `env_scope` | 按 all，两列清空（不凭列表猜成「指定」） |
+| 任务导入文件里某一条非法 | 那一条进 errors 并跳过，其余照常导入 |
+| notify-only 令牌调发通知以外的任何接口（含 `GET /notifications`） | 403「该任务限定了可用环境变量，脚本令牌只能用来发通知」 |
+| notify-only 令牌已被吊销 | 401「令牌已被撤销」 |
+
+### 5. 正常 / 基础 / 错误用例
+
+- 正常：任务指定分组 g1 + 变量名 C → 脚本只看到 g1 的变量和 C；拿 `DAIDAI_TOKEN` 调 `GET /envs`、`POST /tasks` 都是 403；发通知照常。
+- 基础：老库升级后全是 all，注入与令牌与 v3.3.9 一致，只多三个键。
+- 错误：只拦 `/envs`——operator 令牌还能 `POST /tasks` 建一个 all 的任务再 `PUT /tasks/:id/run`，限制形同虚设。
+
+### 6. 必须有的测试
+
+- `service/runtime_env_scope_test.go`：全部模式与改动前一致；按名、按分组（含一条变量多个分组）、并集；禁用变量不注入；两个列表都空；config.sh 与 DAIDAI_* 仍在；
+  selected 时令牌带 notify_only、all 时不带；日志行 0 / 3 / 25 个；备份往返（含没有这三个键的老备份）。
+- `handler/task_env_scope_test.go`：Create / Update / Copy / 导入导出的契约与 400 矩阵；`TestNotifyOnlyScriptTokenOnlyReachesNotificationSend` 走 `router.Setup` 完整路由，v1 与旧 `/api` 都要测；
+  `TestMCPRejectsNotifyOnlyScriptToken`。
+- `database/task_env_scope_migration_test.go`：老 tasks 表补列只发 3 条 ADD、不重建；连跑两次 AutoMigrate 不出现 `tasks__temp`。
+- 端到端（v3.4.0 实测过）：真起一个实例，selected 与 all 两个任务跑同一个探针脚本，比对注入的变量，以及令牌调 `/envs`、`/tasks`、`/notifications/send` 的状态码。
+
+### 7. 错误写法 vs 正确写法
+
+```go
+// 错误：只拦变量接口。operator 令牌还能新建一个「全部」范围的任务再运行它，照样拿到全部变量
+if claims.EnvScoped && strings.HasPrefix(c.FullPath(), "/api/v1/envs") {
+    c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "..."})
+    return
+}
+```
+
+```go
+// 正确：notify-only 令牌只放行发通知这一条路由（v1 与旧 /api 各一份），其余一律 403
+if claims.NotifyOnly && !(c.Request.Method == http.MethodPost && notifyOnlyAllowedPaths[c.FullPath()]) {
+    c.JSON(http.StatusForbidden, gin.H{"error": NotifyOnlyTokenForbiddenMessage})
+    c.Abort()
+    return
+}
+```
+
+- 以后新增解析令牌的入口（JWTAuth 与 MCP 之外），必须同样检查 `NotifyOnly`；新增执行任务的路径，必须传 `TaskRuntimeEnvScope(task)`；
+  内置 helper 将来要调新接口时，先把它加进放行表，否则「指定」任务里的通知会被 403。
