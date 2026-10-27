@@ -1311,10 +1311,12 @@ function handleStatusFilter(value: '' | 'enabled' | 'disabled') {
           >
             <template #prefix><el-icon><Search /></el-icon></template>
           </el-input>
+          <!-- 分组同样要能打字搜索（#167）：分组一多，只能一路滚着找。 -->
           <el-select
             v-model="groupFilters"
             placeholder="分组筛选"
             multiple
+            filterable
             collapse-tags
             collapse-tags-tooltip
             clearable
@@ -1323,8 +1325,8 @@ function handleStatusFilter(value: '' | 'enabled' | 'disabled') {
           >
             <el-option v-for="g in groups" :key="g" :label="g" :value="g" />
           </el-select>
-          <!-- 🔴 filterable 是必须的，不要照抄上面分组筛选那一个：分组通常只有个位数，
-               变量名却可能上百个（同名多条是刻意功能，每个账号一条），不能打字过滤就只能一路滚。
+          <!-- 🔴 filterable 是必须的，与上面分组筛选一样：变量名可能上百个（同名多条是刻意功能，每个账号一条），
+               分组多了也是同样的问题，不能打字过滤就只能一路滚。
                标签渲染成「JD_COOKIE (3)」，括号里是全库同名条数，与后端 by-name 冲突文案里的 N 同源。 -->
           <el-select
             v-model="nameFilters"
